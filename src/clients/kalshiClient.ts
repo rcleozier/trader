@@ -23,22 +23,42 @@ export class KalshiClient {
    */
   async fetchNBAMarkets(): Promise<Market[]> {
     try {
-      // Fetch markets - adjust method name based on actual Kalshi SDK API
-      // @ts-ignore - SDK method names may vary
-      const response = await (this.marketsApi.getMarkets 
-        ? this.marketsApi.getMarkets({}) 
-        : this.marketsApi.listMarkets({}));
+      console.log('  Fetching markets from Kalshi API (status=open, limit=1000)...');
+      // Fetch markets with status='open' to get active markets
+      // Using a high limit to get as many markets as possible
+      const response = await this.marketsApi.getMarkets(
+        1000, // limit - max is 1000
+        undefined, // cursor - start from beginning
+        undefined, // eventTicker
+        undefined, // seriesTicker
+        undefined, // maxCloseTs
+        undefined, // minCloseTs
+        'open', // status - only get open markets
+        undefined // tickers
+      );
 
-      const allMarkets = response.data?.markets || response.data || [];
+      const allMarkets = response.data?.markets || [];
+      console.log(`  Received ${allMarkets.length} total markets from Kalshi`);
       
       // Filter for NBA markets
       const nbaMarkets = allMarkets.filter((m: any) => {
         const title = (m.title || m.name || m.ticker || '').toString().toUpperCase();
-        return title.includes('NBA');
+        const eventTicker = (m.event_ticker || '').toString().toUpperCase();
+        return title.includes('NBA') || eventTicker.includes('NBA');
       });
 
-      return this.parseMarkets(nbaMarkets);
+      console.log(`  Filtered to ${nbaMarkets.length} NBA-related markets`);
+      
+      const parsed = this.parseMarkets(nbaMarkets);
+      console.log(`  Successfully parsed ${parsed.length} NBA markets`);
+      
+      return parsed;
     } catch (error: any) {
+      console.error('  Kalshi API Error:', error.message);
+      if (error.response) {
+        console.error('  Response status:', error.response.status);
+        console.error('  Response data:', JSON.stringify(error.response.data).substring(0, 500));
+      }
       throw new Error(`Failed to fetch Kalshi markets: ${error.message}`);
     }
   }
@@ -62,16 +82,19 @@ export class KalshiClient {
         // Determine side (home/away) from market
         const side = this.determineSide(raw, gameInfo);
 
+        const impliedProb = impliedProbabilityFromKalshiPrice(price);
         markets.push({
           gameId: gameInfo.id,
           game: gameInfo,
-          marketId: raw.market_id || raw.id || '',
-          ticker: raw.ticker || raw.event_ticker || '',
-          title: raw.title || raw.name || '',
+          marketId: raw.ticker || '',
+          ticker: raw.ticker || '',
+          title: raw.title || '',
           side,
           price,
-          impliedProbability: impliedProbabilityFromKalshiPrice(price),
+          impliedProbability: impliedProb,
         });
+        
+        console.log(`    Parsed: ${gameInfo.awayTeam} @ ${gameInfo.homeTeam} - ${side} (Price: ${price}, Prob: ${(impliedProb * 100).toFixed(2)}%)`);
       } catch (error) {
         console.warn(`Failed to parse market ${raw.ticker || raw.id}:`, error);
       }
@@ -99,25 +122,30 @@ export class KalshiClient {
       id: `${awayTeam}-${homeTeam}-${raw.event_ticker || raw.ticker || ''}`,
       homeTeam,
       awayTeam,
-      scheduledTime: raw.event_start_ts || raw.start_time || new Date().toISOString(),
+      scheduledTime: raw.open_time || raw.close_time || new Date().toISOString(),
       status: raw.status,
     };
   }
 
   /**
    * Extract current price from market data
+   * Uses last_price if available, otherwise uses yes_bid (midpoint of yes bid/ask)
    */
   private extractPrice(raw: any): number | null {
-    // Try various price fields that Kalshi might use
-    if (raw.last_price !== undefined) return raw.last_price;
-    if (raw.price !== undefined) return raw.price;
-    if (raw.best_bid !== undefined) return raw.best_bid;
-    if (raw.best_offer !== undefined) return raw.best_offer;
+    // Prefer last_price as it's the most recent trade price
+    if (raw.last_price !== undefined && raw.last_price !== null) {
+      return raw.last_price;
+    }
     
-    // If market has outcomes, try to get price from the "yes" outcome
-    if (raw.outcomes && Array.isArray(raw.outcomes)) {
-      const yesOutcome = raw.outcomes.find((o: any) => o.name === 'Yes' || o.ticker?.endsWith('-Y'));
-      if (yesOutcome?.price !== undefined) return yesOutcome.price;
+    // Fall back to yes_bid (the bid price for "yes" outcome)
+    // This represents the probability that the event will happen
+    if (raw.yes_bid !== undefined && raw.yes_bid !== null) {
+      return raw.yes_bid;
+    }
+    
+    // If yes_bid is not available, try yes_ask
+    if (raw.yes_ask !== undefined && raw.yes_ask !== null) {
+      return raw.yes_ask;
     }
 
     return null;

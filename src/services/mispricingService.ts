@@ -11,11 +11,20 @@ export class MispricingService {
     espnOdds: SportsbookOdds[]
   ): Mispricing[] {
     const mispricings: Mispricing[] = [];
+    let matchedCount = 0;
+
+    console.log(`\n  Matching ${kalshiMarkets.length} Kalshi markets with ${espnOdds.length} ESPN games...`);
 
     for (const market of kalshiMarkets) {
       // Find matching ESPN game
       const matchingOdds = this.findMatchingGame(market, espnOdds);
-      if (!matchingOdds) continue;
+      if (!matchingOdds) {
+        console.log(`    No ESPN match for: ${market.game.awayTeam} @ ${market.game.homeTeam}`);
+        continue;
+      }
+
+      matchedCount++;
+      console.log(`    ✓ Matched: ${market.game.awayTeam} @ ${market.game.homeTeam}`);
 
       // Check both sides (home and away)
       const homeMispricing = this.checkMispricing(
@@ -24,6 +33,7 @@ export class MispricingService {
         'home'
       );
       if (homeMispricing) {
+        console.log(`      ⚠️  HOME mispricing detected: ${homeMispricing.differencePct.toFixed(2)}pp difference`);
         mispricings.push(homeMispricing);
       }
 
@@ -33,10 +43,12 @@ export class MispricingService {
         'away'
       );
       if (awayMispricing) {
+        console.log(`      ⚠️  AWAY mispricing detected: ${awayMispricing.differencePct.toFixed(2)}pp difference`);
         mispricings.push(awayMispricing);
       }
     }
 
+    console.log(`  Matched ${matchedCount} games, found ${mispricings.length} mispricings`);
     return mispricings;
   }
 

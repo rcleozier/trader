@@ -6,40 +6,64 @@ import { NotificationService } from './services/notificationService';
 import { config } from './config';
 
 async function runMispricingCheck(): Promise<void> {
-  console.log('Starting mispricing check...');
+  console.log('\n' + '='.repeat(80));
+  console.log('🔍 Starting NBA Mispricing Check');
+  console.log('='.repeat(80));
   const startTime = Date.now();
 
   try {
     // Fetch data from both sources
-    console.log('Fetching Kalshi markets...');
+    console.log('\n📊 Fetching Kalshi markets...');
     const kalshiClient = new KalshiClient();
     const kalshiMarkets = await kalshiClient.fetchNBAMarkets();
-    console.log(`Found ${kalshiMarkets.length} Kalshi NBA markets`);
-
-    console.log('Fetching ESPN odds...');
-    const espnClient = new ESPNClient();
-    const espnOdds = await espnClient.fetchNBAGamesWithOdds();
-    console.log(`Found ${espnOdds.length} ESPN games with odds`);
-
-    // Find mispricings
-    console.log('Analyzing mispricings...');
-    const mispricingService = new MispricingService();
-    const mispricings = mispricingService.findMispricings(kalshiMarkets, espnOdds);
-    console.log(`Found ${mispricings.length} mispricings above ${config.bot.mispricingThresholdPct * 100}% threshold`);
-
-    // Send SMS alert
-    if (mispricings.length > 0) {
-      console.log('Sending SMS alert...');
-      const notificationService = new NotificationService();
-      await notificationService.sendMispricingAlert(mispricings);
-    } else {
-      console.log('No mispricings detected, no alert sent');
+    console.log(`✅ Found ${kalshiMarkets.length} Kalshi NBA markets`);
+    
+    if (kalshiMarkets.length > 0) {
+      console.log('\nKalshi Markets Summary:');
+      kalshiMarkets.slice(0, 5).forEach((market, idx) => {
+        console.log(`  ${idx + 1}. ${market.game.awayTeam} @ ${market.game.homeTeam} - ${market.side} (Price: ${market.price}, Prob: ${(market.impliedProbability * 100).toFixed(2)}%)`);
+      });
+      if (kalshiMarkets.length > 5) {
+        console.log(`  ... and ${kalshiMarkets.length - 5} more`);
+      }
     }
 
+    console.log('\n📊 Fetching ESPN odds...');
+    const espnClient = new ESPNClient();
+    const espnOdds = await espnClient.fetchNBAGamesWithOdds();
+    console.log(`✅ Found ${espnOdds.length} ESPN games with odds`);
+
+    if (espnOdds.length > 0) {
+      console.log('\nESPN Odds Summary:');
+      espnOdds.slice(0, 5).forEach((odds, idx) => {
+        const homeProb = odds.homeImpliedProbability ? (odds.homeImpliedProbability * 100).toFixed(2) : 'N/A';
+        const awayProb = odds.awayImpliedProbability ? (odds.awayImpliedProbability * 100).toFixed(2) : 'N/A';
+        console.log(`  ${idx + 1}. ${odds.game.awayTeam} @ ${odds.game.homeTeam} - Home: ${homeProb}%, Away: ${awayProb}%`);
+      });
+      if (espnOdds.length > 5) {
+        console.log(`  ... and ${espnOdds.length - 5} more`);
+      }
+    }
+
+    // Find mispricings
+    console.log('\n🔍 Analyzing mispricings...');
+    console.log(`   Threshold: ${config.bot.mispricingThresholdPct * 100}% difference`);
+    const mispricingService = new MispricingService();
+    const mispricings = mispricingService.findMispricings(kalshiMarkets, espnOdds);
+    console.log(`✅ Found ${mispricings.length} mispricings above threshold`);
+
+    // Log mispricings to console
+    const notificationService = new NotificationService();
+    await notificationService.sendMispricingAlert(mispricings);
+
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`Mispricing check completed in ${duration}s`);
+    console.log(`\n⏱️  Mispricing check completed in ${duration}s`);
+    console.log('='.repeat(80));
   } catch (error: any) {
-    console.error('Error during mispricing check:', error.message);
+    console.error('\n❌ Error during mispricing check:', error.message);
+    if (error.stack) {
+      console.error('Stack trace:', error.stack);
+    }
     throw error;
   }
 }

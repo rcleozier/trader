@@ -14,12 +14,50 @@ export class ESPNClient {
    */
   async fetchNBAGamesWithOdds(): Promise<SportsbookOdds[]> {
     try {
+      // Normalize base URL - remove trailing slash if present
+      const baseUrl = config.espn.apiBaseUrl.replace(/\/$/, '');
+      
+      // Check if base URL already includes /scoreboard
+      let endpoint: string;
+      if (baseUrl.endsWith('/scoreboard')) {
+        // Base URL is already the full endpoint, use empty string
+        endpoint = '';
+      } else {
+        // Append /scoreboard
+        endpoint = '/scoreboard';
+      }
+      
+      const fullUrl = baseUrl + endpoint;
+      console.log(`Fetching from ESPN API: ${fullUrl}`);
+      
       // ESPN scoreboard endpoint
-      const response = await this.client.get('/scoreboard');
-      const games = response.data?.events || [];
+      const response = await this.client.get(endpoint);
+      const events = response.data?.events || [];
+      console.log(`ESPN API returned ${events.length} events`);
 
-      return this.parseGamesWithOdds(games);
+      const results = this.parseGamesWithOdds(events);
+      console.log(`Parsed ${results.length} games with odds from ESPN`);
+      return results;
     } catch (error: any) {
+      console.error('ESPN API Error:', error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response headers:', JSON.stringify(error.response.headers));
+        console.error('Request URL:', error.config?.url || 'unknown');
+        console.error('Full request URL:', error.config?.baseURL + error.config?.url);
+        if (error.response.data) {
+          const dataStr = typeof error.response.data === 'string' 
+            ? error.response.data 
+            : JSON.stringify(error.response.data);
+          console.error('Response data:', dataStr.substring(0, 1000));
+        }
+      } else if (error.request) {
+        console.error('No response received. Request config:', JSON.stringify({
+          url: error.config?.url,
+          baseURL: error.config?.baseURL,
+          method: error.config?.method,
+        }));
+      }
       throw new Error(`Failed to fetch ESPN games: ${error.message}`);
     }
   }
@@ -33,30 +71,36 @@ export class ESPNClient {
     for (const event of events) {
       try {
         const game = this.extractGame(event);
-        if (!game) continue;
+        if (!game) {
+          console.log(`  Skipping event ${event.id}: could not extract game info`);
+          continue;
+        }
 
-        // ESPN odds are typically in competitions[0].odds or competitions[0].oddsDetails
+        console.log(`  Processing game: ${game.awayTeam} @ ${game.homeTeam} (${game.id})`);
+
+        // ESPN odds are in competitions[0].odds array
         const odds = this.extractOdds(event);
         
         if (!odds.homeOdds && !odds.awayOdds) {
-          // Skip games without odds
+          console.log(`    No odds found for ${game.awayTeam} @ ${game.homeTeam}`);
           continue;
         }
+
+        const homeProb = odds.homeOdds ? impliedProbabilityFromAmerican(odds.homeOdds) : undefined;
+        const awayProb = odds.awayOdds ? impliedProbabilityFromAmerican(odds.awayOdds) : undefined;
+
+        console.log(`    Odds found - Home: ${odds.homeOdds ? odds.homeOdds : 'N/A'} (${homeProb ? (homeProb * 100).toFixed(1) : 'N/A'}%), Away: ${odds.awayOdds ? odds.awayOdds : 'N/A'} (${awayProb ? (awayProb * 100).toFixed(1) : 'N/A'}%)`);
 
         results.push({
           gameId: game.id,
           game,
           homeOdds: odds.homeOdds,
           awayOdds: odds.awayOdds,
-          homeImpliedProbability: odds.homeOdds 
-            ? impliedProbabilityFromAmerican(odds.homeOdds) 
-            : undefined,
-          awayImpliedProbability: odds.awayOdds 
-            ? impliedProbabilityFromAmerican(odds.awayOdds) 
-            : undefined,
+          homeImpliedProbability: homeProb,
+          awayImpliedProbability: awayProb,
         });
-      } catch (error) {
-        console.warn(`Failed to parse ESPN game ${event.id}:`, error);
+      } catch (error: any) {
+        console.warn(`  Failed to parse ESPN game ${event.id}:`, error.message);
       }
     }
 
@@ -92,7 +136,7 @@ export class ESPNClient {
 
   /**
    * Extract odds from ESPN event
-   * ESPN odds structure can vary - this is a best-effort extraction
+   * Based on actual ESPN API structure from scoreboard endpoint
    */
   private extractOdds(event: any): { homeOdds?: number; awayOdds?: number } {
     const competitions = event.competitions || [];
@@ -100,50 +144,70 @@ export class ESPNClient {
 
     const competition = competitions[0];
     
-    // Try various locations for odds
-    // ESPN may have odds in competition.odds, competition.oddsDetails, or event.odds
-    const oddsSource = competition.odds || competition.oddsDetails || event.odds || [];
+    // ESPN has odds in two places:
+    // 1. competition.odds array (provider-based)
+    // 2. competition.moneyline object (direct moneyline odds)
     
-    if (!Array.isArray(oddsSource) || oddsSource.length === 0) {
-      return {};
+    // Try the direct moneyline object first (simpler structure)
+    if (competition.moneyline) {
+      const ml = competition.moneyline;
+      const homeOddsStr = ml.home?.close?.odds || ml.home?.open?.odds;
+      const awayOddsStr = ml.away?.close?.odds || ml.away?.open?.odds;
+      
+      if (homeOddsStr && awayOddsStr) {
+        const homeOdds = this.parseOddsString(homeOddsStr);
+        const awayOdds = this.parseOddsString(awayOddsStr);
+        
+        if (homeOdds !== null && awayOdds !== null) {
+          return { homeOdds, awayOdds };
+        }
+      }
     }
-
-    // Look for moneyline odds
-    const moneyline = oddsSource.find((o: any) => 
-      o.type === 'moneyline' || 
-      o.name === 'Moneyline' ||
-      o.typeId === '1' // Common ID for moneyline
-    );
-
-    if (!moneyline) return {};
-
-    // ESPN odds format can vary - try to extract from details or outcomes
-    const details = moneyline.details || moneyline.outcomes || [];
     
-    if (details.length < 2) return {};
-
-    // Try to match outcomes to home/away teams
-    const competitors = competition.competitors || [];
-    const homeTeam = competitors.find((c: any) => c.homeAway === 'home')?.team;
-    const awayTeam = competitors.find((c: any) => c.homeAway === 'away')?.team;
-
-    let homeOdds: number | undefined;
-    let awayOdds: number | undefined;
-
-    for (const detail of details) {
-      const teamName = detail.name || detail.label || '';
-      const odds = detail.odds || detail.american || detail.price;
-
-      if (odds === undefined || odds === null) continue;
-
-      // Match to home/away team
-      if (homeTeam && (teamName.includes(homeTeam.abbreviation) || teamName.includes(homeTeam.name))) {
-        homeOdds = typeof odds === 'string' ? parseInt(odds) : odds;
-      } else if (awayTeam && (teamName.includes(awayTeam.abbreviation) || teamName.includes(awayTeam.name))) {
-        awayOdds = typeof odds === 'string' ? parseInt(odds) : odds;
+    // Fall back to odds array with provider structure
+    const oddsArray = competition.odds || [];
+    if (Array.isArray(oddsArray) && oddsArray.length > 0) {
+      // Look for moneyline in the odds array
+      // The structure has awayTeamOdds and homeTeamOdds with moneyLine field
+      for (const oddsObj of oddsArray) {
+        if (oddsObj.awayTeamOdds?.moneyLine && oddsObj.homeTeamOdds?.moneyLine) {
+          return {
+            homeOdds: oddsObj.homeTeamOdds.moneyLine,
+            awayOdds: oddsObj.awayTeamOdds.moneyLine,
+          };
+        }
       }
     }
 
-    return { homeOdds, awayOdds };
+    return {};
+  }
+
+  /**
+   * Parse odds string to number
+   * Handles formats like "-105", "+150", "EVEN" (which is +100)
+   */
+  private parseOddsString(oddsStr: string | number): number | null {
+    if (typeof oddsStr === 'number') {
+      return oddsStr;
+    }
+    
+    if (typeof oddsStr !== 'string') {
+      return null;
+    }
+    
+    const trimmed = oddsStr.trim().toUpperCase();
+    
+    // Handle "EVEN" which means +100
+    if (trimmed === 'EVEN' || trimmed === 'EV') {
+      return 100;
+    }
+    
+    // Parse numeric odds like "-105" or "+150"
+    const parsed = parseInt(trimmed);
+    if (!isNaN(parsed)) {
+      return parsed;
+    }
+    
+    return null;
   }
 }

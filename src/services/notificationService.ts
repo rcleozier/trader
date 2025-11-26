@@ -1,63 +1,46 @@
-import twilio from 'twilio';
-import { config } from '../config';
 import { Mispricing } from '../types/markets';
 
 export class NotificationService {
-  private client: twilio.Twilio;
-
-  constructor() {
-    this.client = twilio(
-      config.twilio.accountSid,
-      config.twilio.authToken
-    );
-  }
-
   /**
-   * Send SMS alert with mispricing information
+   * Log mispricing alert to console with detailed information
    */
   async sendMispricingAlert(mispricings: Mispricing[]): Promise<void> {
     if (mispricings.length === 0) {
-      console.log('No mispricings detected, skipping SMS alert');
+      console.log('\n✅ No mispricings detected above threshold');
       return;
     }
 
-    const message = this.formatMispricingMessage(mispricings);
+    console.log('\n' + '='.repeat(80));
+    console.log(`🏀 NBA MISPRICING ALERT - ${mispricings.length} OPPORTUNITY(IES) FOUND`);
+    console.log('='.repeat(80));
 
-    try {
-      const result = await this.client.messages.create({
-        body: message,
-        from: config.twilio.fromNumber,
-        to: config.twilio.alertToNumber,
-      });
-
-      console.log(`SMS alert sent successfully. SID: ${result.sid}`);
-    } catch (error: any) {
-      throw new Error(`Failed to send SMS alert: ${error.message}`);
-    }
-  }
-
-  /**
-   * Format mispricings into SMS message
-   */
-  private formatMispricingMessage(mispricings: Mispricing[]): string {
-    let message = `🏀 NBA Mispricing Alert (${mispricings.length} found)\n\n`;
-
-    for (const mispricing of mispricings) {
-      const { game, side, kalshiImpliedProbability, sportsbookImpliedProbability, 
-              sportsbookOdds, differencePct } = mispricing;
+    for (let i = 0; i < mispricings.length; i++) {
+      const mispricing = mispricings[i];
+      const { game, side, kalshiPrice, kalshiImpliedProbability, sportsbookImpliedProbability, 
+              sportsbookOdds, difference, differencePct } = mispricing;
 
       const team = side === 'home' ? game.homeTeam : game.awayTeam;
-      const kalshiPct = (kalshiImpliedProbability * 100).toFixed(1);
-      const espnPct = (sportsbookImpliedProbability * 100).toFixed(1);
+      const kalshiPct = (kalshiImpliedProbability * 100).toFixed(2);
+      const espnPct = (sportsbookImpliedProbability * 100).toFixed(2);
       const oddsSign = sportsbookOdds > 0 ? '+' : '';
 
-      message += `${game.awayTeam} @ ${game.homeTeam}\n`;
-      message += `${team} (${side}):\n`;
-      message += `  Kalshi: ${kalshiPct}%\n`;
-      message += `  ESPN: ${espnPct}% (${oddsSign}${sportsbookOdds})\n`;
-      message += `  Diff: ${differencePct.toFixed(1)}pp\n\n`;
+      console.log(`\n[${i + 1}] ${game.awayTeam} @ ${game.homeTeam}`);
+      console.log(`    Game ID: ${game.id}`);
+      console.log(`    Scheduled: ${game.scheduledTime}`);
+      console.log(`    Status: ${game.status || 'Unknown'}`);
+      console.log(`\n    ${team} (${side.toUpperCase()}):`);
+      console.log(`      Kalshi Price: ${kalshiPrice} → ${kalshiPct}% implied probability`);
+      console.log(`      ESPN Odds: ${oddsSign}${sportsbookOdds} → ${espnPct}% implied probability`);
+      console.log(`      Difference: ${differencePct.toFixed(2)} percentage points (${(difference * 100).toFixed(2)}% absolute)`);
+      
+      // Show arbitrage opportunity
+      if (kalshiImpliedProbability < sportsbookImpliedProbability) {
+        console.log(`      💰 OPPORTUNITY: Kalshi undervalues ${team} - bet on Kalshi`);
+      } else {
+        console.log(`      💰 OPPORTUNITY: Kalshi overvalues ${team} - bet against on Kalshi`);
+      }
     }
 
-    return message.trim();
+    console.log('\n' + '='.repeat(80));
   }
 }

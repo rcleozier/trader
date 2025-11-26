@@ -14,7 +14,7 @@ interface Config {
   espn: {
     apiBaseUrl: string;
   };
-  twilio: {
+  twilio?: {
     accountSid: string;
     authToken: string;
     fromNumber: string;
@@ -58,12 +58,12 @@ export const config: Config = {
   espn: {
     apiBaseUrl: getOptionalEnv('ESPN_API_BASE_URL', 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba') || '',
   },
-  twilio: {
+  twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {
     accountSid: requireEnv('TWILIO_ACCOUNT_SID'),
     authToken: requireEnv('TWILIO_AUTH_TOKEN'),
     fromNumber: requireEnv('TWILIO_FROM_NUMBER'),
     alertToNumber: requireEnv('ALERT_TO_NUMBER'),
-  },
+  } : undefined,
   bot: {
     mispricingThresholdPct: parseFloat(getOptionalEnv('MISPRICING_THRESHOLD_PCT', '0.05') || '0.05'),
     runScheduleCron: getOptionalEnv('RUN_SCHEDULE_CRON'),
