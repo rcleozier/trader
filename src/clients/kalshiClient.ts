@@ -73,29 +73,32 @@ export class KalshiClient {
         const titleUpper = title.toUpperCase();
         const eventTicker = (m.event_ticker || '').toString().toUpperCase();
         
-        // Exclude proposition markets
-        const isProposition = titleUpper.startsWith('WILL ') ||
-                             titleUpper.startsWith('WHO ') ||
-                             titleUpper.includes(' WILL ') ||
-                             titleUpper.includes(' WHO ') ||
-                             titleUpper.includes('BEFORE ') ||
-                             titleUpper.includes('APPROVE') ||
-                             titleUpper.includes('OWNER') ||
-                             titleUpper.includes('?') ||
-                             titleUpper.includes('COVER ATHLETE') ||
-                             titleUpper.includes('FRANCHISE');
-        
-        if (isProposition) {
-          return false;
-        }
-        
-        // Look for game indicators: @ symbol, team names, vs
+        // Look for game indicators first: @ symbol, team names, vs, "Winner?"
         const hasGameFormat = title.includes('@') || 
                              titleUpper.includes(' VS ') || 
                              titleUpper.includes(' V ') ||
+                             titleUpper.includes('WINNER?') ||
                              eventTicker.includes('@');
         
-        return hasGameFormat;
+        // If it has game format, it's likely a game market (even if it has "?")
+        if (hasGameFormat) {
+          // Still exclude obvious propositions that might have game format
+          const isProposition = titleUpper.startsWith('WILL ') ||
+                               titleUpper.startsWith('WHO ') ||
+                               titleUpper.includes(' WILL ') ||
+                               titleUpper.includes(' WHO ') ||
+                               titleUpper.includes('BEFORE ') ||
+                               titleUpper.includes('APPROVE') ||
+                               titleUpper.includes('OWNER') ||
+                               titleUpper.includes('COVER ATHLETE') ||
+                               titleUpper.includes('FRANCHISE');
+          
+          // If it has game format and is not a proposition, include it
+          return !isProposition;
+        }
+        
+        // No game format found, exclude it
+        return false;
       });
       
       console.log(`  Filtered to ${gameMarkets.length} NBA game markets (excluding propositions)`);
@@ -179,59 +182,129 @@ export class KalshiClient {
 
   /**
    * Extract game information from market data
-   * This is a heuristic - adjust based on actual Kalshi market structure
+   * Kalshi ticker format: KXNBAGAME-25NOV28DALLAL-LAL
+   * Event ticker format: KXNBAGAME-25NOV28DALLAL (contains both team abbreviations)
    */
   private extractGameInfo(raw: any): Game | null {
     const title = (raw.title || raw.name || '').toString();
     const ticker = (raw.ticker || '').toString();
     const eventTicker = (raw.event_ticker || '').toString();
     
-    // Try multiple patterns to extract team names
-    // Pattern 1: "Team1 @ Team2" or "Team1 vs Team2"
-    let teamMatch = title.match(/([A-Za-z\s]+?)\s*(?:@|vs|v\.?)\s*([A-Za-z\s]+?)(?:\s|$|:)/i);
+    // NBA team abbreviation mapping
+    const teamAbbrevMap: { [key: string]: string } = {
+      'ATL': 'ATL', 'BOS': 'BOS', 'BKN': 'BKN', 'CHA': 'CHA', 'CHI': 'CHI',
+      'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN', 'DET': 'DET', 'GS': 'GS',
+      'GSW': 'GS', 'HOU': 'HOU', 'IND': 'IND', 'LAC': 'LAC', 'LAL': 'LAL',
+      'MEM': 'MEM', 'MIA': 'MIA', 'MIL': 'MIL', 'MIN': 'MIN', 'NO': 'NO',
+      'NOP': 'NO', 'NY': 'NY', 'NYK': 'NY', 'OKC': 'OKC', 'ORL': 'ORL',
+      'PHI': 'PHI', 'PHX': 'PHX', 'POR': 'POR', 'SAC': 'SAC', 'SA': 'SA',
+      'SAS': 'SA', 'TOR': 'TOR', 'UTA': 'UTA', 'WAS': 'WAS', 'WSH': 'WAS'
+    };
     
-    // Pattern 2: Try from ticker format (e.g., "NBA-LAL-GSW-Y" or "NBA-LAL@GSW")
-    if (!teamMatch && ticker) {
-      const tickerMatch = ticker.match(/([A-Z]+)[-@]([A-Z]+)/i);
-      if (tickerMatch) {
-        teamMatch = [null, tickerMatch[1], tickerMatch[2]];
-      }
-    }
+    // Try to extract from event ticker first (most reliable)
+    // Format: KXNBAGAME-25NOV28DALLAL where DALLAL = DAL + LAL
+    let awayAbbrev: string | null = null;
+    let homeAbbrev: string | null = null;
     
-    // Pattern 3: Try from event ticker
-    if (!teamMatch && eventTicker) {
-      const eventMatch = eventTicker.match(/([A-Z]+)[-@]([A-Z]+)/i);
+    if (eventTicker) {
+      // Extract the team abbreviations part (after date)
+      const eventMatch = eventTicker.match(/KXNBAGAME-\d+([A-Z]+)/i);
       if (eventMatch) {
-        teamMatch = [null, eventMatch[1], eventMatch[2]];
+        const combinedAbbrev = eventMatch[1];
+        // Try to split combined abbreviations (e.g., DALLAL = DAL + LAL)
+        // Common patterns: 3+3, 3+4, 4+3, 3+2, 2+3
+        const possibleSplits = [
+          [3, 3], [3, 4], [4, 3], [3, 2], [2, 3], [4, 4], [2, 4], [4, 2]
+        ];
+        
+        for (const [len1, len2] of possibleSplits) {
+          if (combinedAbbrev.length >= len1 + len2) {
+            const abbrev1 = combinedAbbrev.substring(0, len1);
+            const abbrev2 = combinedAbbrev.substring(len1, len1 + len2);
+            
+            // Check if both are valid team abbreviations
+            if (teamAbbrevMap[abbrev1] && teamAbbrevMap[abbrev2]) {
+              awayAbbrev = teamAbbrevMap[abbrev1];
+              homeAbbrev = teamAbbrevMap[abbrev2];
+              break;
+            }
+          }
+        }
       }
     }
     
-    // If we still can't extract, use the title/ticker as fallback
-    if (!teamMatch) {
-      // Use first part of title or ticker as away, second as home
-      const parts = title.split(/\s*(?:@|vs|v\.?)\s*/i);
-      if (parts.length >= 2) {
-        teamMatch = [null, parts[0].trim(), parts[1].trim()];
-      } else {
-        // Last resort: use ticker or event ticker as identifier
-        const identifier = ticker || eventTicker || title;
-        return {
-          id: identifier,
-          homeTeam: 'Unknown',
-          awayTeam: 'Unknown',
-          scheduledTime: raw.open_time || raw.close_time || new Date().toISOString(),
-          status: raw.status,
-        };
+    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL
+    if (!awayAbbrev && ticker) {
+      const tickerMatch = ticker.match(/KXNBAGAME-\d+([A-Z]+)-([A-Z]+)/i);
+      if (tickerMatch) {
+        const combined = tickerMatch[1];
+        const sideAbbrev = tickerMatch[2];
+        
+        // Try to split combined to find the other team
+        for (const [len1, len2] of [[3, 3], [3, 4], [4, 3], [3, 2], [2, 3]]) {
+          if (combined.length >= len1 + len2) {
+            const abbrev1 = combined.substring(0, len1);
+            const abbrev2 = combined.substring(len1, len1 + len2);
+            
+            if (teamAbbrevMap[abbrev1] && teamAbbrevMap[abbrev2]) {
+              if (teamAbbrevMap[abbrev1] === sideAbbrev || abbrev1 === sideAbbrev) {
+                awayAbbrev = teamAbbrevMap[abbrev2];
+                homeAbbrev = teamAbbrevMap[abbrev1];
+              } else if (teamAbbrevMap[abbrev2] === sideAbbrev || abbrev2 === sideAbbrev) {
+                awayAbbrev = teamAbbrevMap[abbrev1];
+                homeAbbrev = teamAbbrevMap[abbrev2];
+              }
+              break;
+            }
+          }
+        }
       }
     }
-
-    const awayTeam = teamMatch[1]?.trim() || 'Unknown';
-    const homeTeam = teamMatch[2]?.trim() || 'Unknown';
+    
+    // Last resort: Try to parse from title
+    if (!awayAbbrev) {
+      const titleMatch = title.match(/([A-Za-z\s]+?)\s*(?:@|vs|v\.?)\s*([A-Za-z\s]+?)(?:\s|$|:)/i);
+      if (titleMatch) {
+        // Try to map full names to abbreviations (basic mapping)
+        const awayName = titleMatch[1]?.trim() || '';
+        const homeName = titleMatch[2]?.trim() || '';
+        
+        // Simple name to abbrev mapping for common cases
+        const nameToAbbrev: { [key: string]: string } = {
+          'dallas': 'DAL', 'los angeles l': 'LAL', 'los angeles c': 'LAC',
+          'memphis': 'MEM', 'san antonio': 'SA', 'denver': 'DEN',
+          'sacramento': 'SAC', 'utah': 'UTA', 'phoenix': 'PHX',
+          'oklahoma city': 'OKC', 'orlando': 'ORL', 'detroit': 'DET',
+          'milwaukee': 'MIL', 'miami': 'MIA', 'philadelphia': 'PHI',
+          'brooklyn': 'BKN', 'cleveland': 'CLE', 'washington': 'WAS',
+          'indiana': 'IND', 'chicago': 'CHI', 'charlotte': 'CHA',
+          'houston': 'HOU', 'golden state': 'GS', 'portland': 'POR',
+          'toronto': 'TOR', 'minnesota': 'MIN', 'new york': 'NY',
+          'new orleans': 'NO', 'atlanta': 'ATL', 'boston': 'BOS'
+        };
+        
+        const awayKey = awayName.toLowerCase();
+        const homeKey = homeName.toLowerCase();
+        
+        for (const [name, abbrev] of Object.entries(nameToAbbrev)) {
+          if (awayKey.includes(name)) {
+            awayAbbrev = abbrev;
+          }
+          if (homeKey.includes(name)) {
+            homeAbbrev = abbrev;
+          }
+        }
+      }
+    }
+    
+    if (!awayAbbrev || !homeAbbrev) {
+      return null;
+    }
 
     return {
-      id: `${awayTeam}-${homeTeam}-${raw.event_ticker || raw.ticker || ''}`,
-      homeTeam,
-      awayTeam,
+      id: `${awayAbbrev}-${homeAbbrev}-${raw.event_ticker || raw.ticker || ''}`,
+      homeTeam: homeAbbrev,
+      awayTeam: awayAbbrev,
       scheduledTime: raw.open_time || raw.close_time || new Date().toISOString(),
       status: raw.status,
     };

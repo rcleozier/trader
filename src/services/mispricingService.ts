@@ -77,13 +77,18 @@ export class MispricingService {
   }
 
   /**
-   * Check if two games match exactly
+   * Check if two games match exactly (using abbreviations)
    */
   private gamesMatch(game1: Market['game'], game2: SportsbookOdds['game']): boolean {
-    return (
-      game1.homeTeam.toLowerCase() === game2.homeTeam.toLowerCase() &&
-      game1.awayTeam.toLowerCase() === game2.awayTeam.toLowerCase()
-    );
+    // Normalize team names to uppercase for comparison
+    const game1Home = game1.homeTeam.toUpperCase().trim();
+    const game1Away = game1.awayTeam.toUpperCase().trim();
+    const game2Home = game2.homeTeam.toUpperCase().trim();
+    const game2Away = game2.awayTeam.toUpperCase().trim();
+    
+    // Exact match (same order or reversed)
+    return (game1Home === game2Home && game1Away === game2Away) ||
+           (game1Home === game2Away && game1Away === game2Home);
   }
 
   /**
