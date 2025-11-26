@@ -1,48 +1,64 @@
-import { Configuration, MarketsApi } from 'kalshi-typescript';
+import { Configuration, MarketsApi, EventsApi, SeriesApi } from 'kalshi-typescript';
+import axios from 'axios';
 import { config } from '../config';
 import { Market, Game } from '../types/markets';
 import { impliedProbabilityFromKalshiPrice } from '../lib/odds';
 
 export class KalshiClient {
   private marketsApi: MarketsApi;
+  private eventsApi: EventsApi;
+  private seriesApi: SeriesApi;
+  private kalshiConfig: Configuration;
+  private axiosClient: any;
 
   constructor() {
-    const kalshiConfig = new Configuration({
+    this.kalshiConfig = new Configuration({
       apiKey: config.kalshi.apiKeyId,
       privateKeyPath: config.kalshi.privateKeyPath,
       privateKeyPem: config.kalshi.privateKeyPem,
       basePath: config.kalshi.apiBaseUrl,
     });
 
-    this.marketsApi = new MarketsApi(kalshiConfig);
+    this.marketsApi = new MarketsApi(this.kalshiConfig);
+    this.eventsApi = new EventsApi(this.kalshiConfig);
+    this.seriesApi = new SeriesApi(this.kalshiConfig);
+    
+    // Create axios client for direct API calls (like live-data)
+    this.axiosClient = axios.create({
+      baseURL: config.kalshi.apiBaseUrl,
+      timeout: 10000,
+    });
   }
 
   /**
    * Fetch NBA markets from Kalshi
-   * Filters for NBA-related markets based on ticker/title
+   * Focuses on KXNBAGAMES series for live games
    */
   async fetchNBAMarkets(): Promise<Market[]> {
     try {
-      console.log('  Fetching markets from Kalshi API (status=open, limit=1000)...');
-      // Fetch markets with status='open' to get active markets
-      // Using a high limit to get as many markets as possible
-      const response = await this.marketsApi.getMarkets(
-        1000, // limit - max is 1000
-        undefined, // cursor - start from beginning
+      const currentTime = Math.floor(Date.now() / 1000);
+      
+      // Use only KXNBAGAMES series ticker
+      const seriesTicker = 'KXNBAGAMES';
+      
+      console.log(`  Fetching markets with series_ticker=${seriesTicker}...`);
+      const marketsResponse = await this.marketsApi.getMarkets(
+        1000, // limit
+        undefined, // cursor
         undefined, // eventTicker
-        undefined, // seriesTicker
+        seriesTicker, // seriesTicker
         undefined, // maxCloseTs
-        undefined, // minCloseTs
-        'open', // status - only get open markets
+        currentTime, // minCloseTs - markets closing now or later (live games)
+        'open', // status
         undefined // tickers
       );
 
-      const allMarkets = response.data?.markets || [];
-      console.log(`  Received ${allMarkets.length} total markets from Kalshi`);
+      const allMarkets = marketsResponse.data?.markets || [];
+      console.log(`  Found ${allMarkets.length} markets for series ${seriesTicker}`);
       
-      // Log sample of all markets to see what we're getting
+      // Log sample markets to see what we're getting
       if (allMarkets.length > 0) {
-        console.log(`  Sample of first 10 markets (all types):`);
+        console.log(`  Sample of first 10 NBA markets:`);
         allMarkets.slice(0, 10).forEach((m: any, idx: number) => {
           const title = m.title || 'No title';
           const ticker = m.ticker || 'N/A';
@@ -51,25 +67,13 @@ export class KalshiClient {
         });
       }
       
-      // Count NBA-related markets before filtering
-      const nbaRelatedCount = allMarkets.filter((m: any) => {
-        const title = (m.title || '').toString().toUpperCase();
-        const eventTicker = (m.event_ticker || '').toString().toUpperCase();
-        return title.includes('NBA') || eventTicker.includes('NBA');
-      }).length;
-      console.log(`  Found ${nbaRelatedCount} NBA-related markets (before game filtering)`);
-      
-      // Filter for NBA GAME markets (not proposition/futures markets)
-      // Game markets typically have team names or "@" symbol indicating a matchup
-      const nbaMarkets = allMarkets.filter((m: any) => {
-        const title = (m.title || m.name || '').toString();
+      // Filter for actual game markets (not proposition/futures markets)
+      const gameMarkets = allMarkets.filter((m: any) => {
+        const title = (m.title || '').toString();
         const titleUpper = title.toUpperCase();
         const eventTicker = (m.event_ticker || '').toString().toUpperCase();
-        const seriesTicker = (m.series_ticker || '').toString().toUpperCase();
-        const subtitle = (m.subtitle || '').toString().toUpperCase();
-        const ticker = (m.ticker || '').toString().toUpperCase();
         
-        // Exclude proposition/futures markets (questions, "will", "before", etc.)
+        // Exclude proposition markets
         const isProposition = titleUpper.startsWith('WILL ') ||
                              titleUpper.startsWith('WHO ') ||
                              titleUpper.includes(' WILL ') ||
@@ -85,57 +89,27 @@ export class KalshiClient {
           return false;
         }
         
-        // Look for actual game indicators:
-        // 1. Has "@" symbol (team @ team format)
-        // 2. Has team abbreviations (common NBA team codes)
-        // 3. Has "vs" or "v" (versus)
+        // Look for game indicators: @ symbol, team names, vs
         const hasGameFormat = title.includes('@') || 
                              titleUpper.includes(' VS ') || 
                              titleUpper.includes(' V ') ||
-                             ticker.includes('@');
+                             eventTicker.includes('@');
         
-        // Common NBA team abbreviations to look for
-        const nbaTeams = ['BOS', 'BKN', 'NY', 'PHI', 'TOR', 'CHI', 'CLE', 'DET', 'IND', 'MIL',
-                         'ATL', 'CHA', 'MIA', 'ORL', 'WAS', 'DEN', 'MIN', 'OKC', 'POR', 'UTA',
-                         'GS', 'LAC', 'LAL', 'PHX', 'SAC', 'DAL', 'HOU', 'MEM', 'NO', 'SA',
-                         'CELTICS', 'NETS', 'KNICKS', '76ERS', 'RAPTORS', 'BULLS', 'CAVALIERS',
-                         'PISTONS', 'PACERS', 'BUCKS', 'HAWKS', 'HORNETS', 'HEAT', 'MAGIC',
-                         'WIZARDS', 'NUGGETS', 'TIMBERWOLVES', 'THUNDER', 'TRAILBLAZERS',
-                         'JAZZ', 'WARRIORS', 'CLIPPERS', 'LAKERS', 'SUNS', 'KINGS', 'MAVERICKS',
-                         'ROCKETS', 'GRIZZLIES', 'PELICANS', 'SPURS'];
-        
-        const hasTeamName = nbaTeams.some(team => 
-          titleUpper.includes(team) || 
-          ticker.includes(team) || 
-          eventTicker.includes(team)
-        );
-        
-        // Must have game format OR team names (NBA-related check is less strict)
-        // Also check if it's a game by looking at close_time (games close on game day)
-        const isNbaRelated = titleUpper.includes('NBA') || 
-                            eventTicker.includes('NBA') || 
-                            seriesTicker.includes('NBA') ||
-                            subtitle.includes('NBA') ||
-                            hasTeamName;
-        
-        // For game markets, we want either:
-        // 1. Has game format (@ or vs) AND is NBA-related, OR
-        // 2. Has team names (likely a game market)
-        return isNbaRelated && (hasGameFormat || hasTeamName);
+        return hasGameFormat;
       });
-
-      console.log(`  Filtered to ${nbaMarkets.length} NBA-related markets`);
       
-      // If we found NBA markets, log their details
-      if (nbaMarkets.length > 0) {
-        console.log(`  NBA Markets found:`);
-        nbaMarkets.forEach((m: any, idx: number) => {
+      console.log(`  Filtered to ${gameMarkets.length} NBA game markets (excluding propositions)`);
+      
+      // Log details of found game markets
+      if (gameMarkets.length > 0) {
+        console.log(`  NBA Game Markets found:`);
+        gameMarkets.forEach((m: any, idx: number) => {
           console.log(`    ${idx + 1}. ${m.title || 'No title'} (Ticker: ${m.ticker}, Event: ${m.event_ticker})`);
         });
       }
       
-      const parsed = this.parseMarkets(nbaMarkets);
-      console.log(`  Successfully parsed ${parsed.length} NBA markets`);
+      const parsed = this.parseMarkets(gameMarkets);
+      console.log(`  Successfully parsed ${parsed.length} NBA game markets`);
       
       return parsed;
     } catch (error: any) {
