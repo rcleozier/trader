@@ -35,4 +35,5 @@ export interface Mispricing {
   sportsbookImpliedProbability: number;
   difference: number; // Absolute difference in probability
   differencePct: number; // Difference as percentage points
+  isKalshiOvervaluing?: boolean; // True if Kalshi has higher implied probability than ESPN
 }

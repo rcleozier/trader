@@ -37,6 +37,7 @@ export class KalshiClient {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
       
+      console.log(`  🔍 Fetching ${sport.toUpperCase()} markets with series_ticker=${seriesTicker}...`);
       const marketsResponse = await this.marketsApi.getMarkets(
         1000, // limit
         undefined, // cursor
@@ -49,6 +50,14 @@ export class KalshiClient {
       );
 
       const allMarkets = marketsResponse.data?.markets || [];
+      console.log(`  📦 Received ${allMarkets.length} total markets from Kalshi for ${seriesTicker}`);
+      
+      if (allMarkets.length > 0) {
+        console.log(`  📋 Sample markets (first 5):`);
+        allMarkets.slice(0, 5).forEach((m: any, idx: number) => {
+          console.log(`    ${idx + 1}. ${m.title || 'No title'} (Ticker: ${m.ticker}, Event: ${m.event_ticker})`);
+        });
+      }
       
       // Filter for actual game markets (not proposition/futures markets)
       const gameMarkets = allMarkets.filter((m: any) => {
@@ -84,7 +93,10 @@ export class KalshiClient {
         return false;
       });
       
+      console.log(`  ✅ Filtered to ${gameMarkets.length} game markets (excluding propositions)`);
+      
       const parsed = this.parseMarkets(gameMarkets, sport);
+      console.log(`  ✅ Successfully parsed ${parsed.length} ${sport.toUpperCase()} markets`);
       
       return parsed;
     } catch (error: any) {
@@ -171,15 +183,15 @@ export class KalshiClient {
     };
     
     const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : nbaTeamAbbrevMap;
-    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 'KXNBAGAME';
+    const seriesPrefix = sport === 'nfl' ? 'kxnflgame' : 'KXNBAGAME'; // NFL uses lowercase
     
     // Try to extract from event ticker first (most reliable)
-    // Format: KXNBAGAME-25NOV28DALLAL or KXNFLGAME-25NOV28DALLAL
+    // Format: KXNBAGAME-25NOV28DALLAL or kxnflgame-25DEC01NYGNE
     let awayAbbrev: string | null = null;
     let homeAbbrev: string | null = null;
     
     if (eventTicker) {
-      // Extract the team abbreviations part (after date)
+      // Extract the team abbreviations part (after date) - case insensitive
       const eventMatch = eventTicker.match(new RegExp(`${seriesPrefix}-\\d+([A-Z]+)`, 'i'));
       if (eventMatch) {
         const combinedAbbrev = eventMatch[1];
@@ -205,7 +217,7 @@ export class KalshiClient {
       }
     }
     
-    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL or KXNFLGAME-25NOV28DALLAL-LAL
+    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL or kxnflgame-25DEC01NYGNE-NYG
     if (!awayAbbrev && ticker) {
       const tickerMatch = ticker.match(new RegExp(`${seriesPrefix}-\\d+([A-Z]+)-([A-Z]+)`, 'i'));
       if (tickerMatch) {

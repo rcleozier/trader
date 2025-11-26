@@ -18,9 +18,11 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl'): Promise<void> {
     // Fetch data from both sources
     const kalshiClient = new KalshiClient();
     const kalshiMarkets = await kalshiClient.fetchMarkets(sportConfig.kalshiSeries, sport);
+    console.log(`  📊 Kalshi: Found ${kalshiMarkets.length} ${sportName} markets`);
     
     const espnClient = new ESPNClient();
     const espnOdds = await espnClient.fetchGamesWithOdds(sportConfig.espnPath);
+    console.log(`  📊 ESPN: Found ${espnOdds.length} ${sportName} games with odds`);
 
     // Find mispricings and build comparisons
     const mispricingService = new MispricingService();
@@ -44,10 +46,16 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl'): Promise<void> {
           const diff = comp.home.espn && comp.home.kalshi
             ? `${(Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100).toFixed(1)}pp`
             : 'N/A';
-          const mispricingFlag = comp.home.espn && comp.home.kalshi && 
-            Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100
-            ? ' ⚠️ MISPRICING'
-            : '';
+          const isMispricing = comp.home.espn && comp.home.kalshi && 
+            Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100;
+          const isOvervaluing = comp.home.espn && comp.home.kalshi && 
+            comp.home.kalshi.prob > comp.home.espn.prob;
+          let mispricingFlag = '';
+          if (isMispricing) {
+            mispricingFlag = isOvervaluing 
+              ? ' ⚠️ MISPRICING (Kalshi OVERVALUING)'
+              : ' ⚠️ MISPRICING (Kalshi UNDERVALUING)';
+          }
           console.log(`    HOME (${comp.game.homeTeam}): ESPN: ${espnStr.padEnd(20)} Kalshi: ${kalshiStr.padEnd(20)} Diff: ${diff}${mispricingFlag}`);
         }
         
@@ -62,10 +70,16 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl'): Promise<void> {
           const diff = comp.away.espn && comp.away.kalshi
             ? `${(Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100).toFixed(1)}pp`
             : 'N/A';
-          const mispricingFlag = comp.away.espn && comp.away.kalshi && 
-            Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100
-            ? ' ⚠️ MISPRICING'
-            : '';
+          const isMispricing = comp.away.espn && comp.away.kalshi && 
+            Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100;
+          const isOvervaluing = comp.away.espn && comp.away.kalshi && 
+            comp.away.kalshi.prob > comp.away.espn.prob;
+          let mispricingFlag = '';
+          if (isMispricing) {
+            mispricingFlag = isOvervaluing 
+              ? ' ⚠️ MISPRICING (Kalshi OVERVALUING)'
+              : ' ⚠️ MISPRICING (Kalshi UNDERVALUING)';
+          }
           console.log(`    AWAY (${comp.game.awayTeam}): ESPN: ${espnStr.padEnd(20)} Kalshi: ${kalshiStr.padEnd(20)} Diff: ${diff}${mispricingFlag}`);
         }
         console.log('');

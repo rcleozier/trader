@@ -90,39 +90,43 @@ export class MispricingService {
 
       // Check for mispricings
       if (gameData.kalshi.home && gameData.espn.homeImpliedProbability !== undefined) {
-        const diff = probabilityDifferencePct(
-          gameData.kalshi.home.impliedProbability,
-          gameData.espn.homeImpliedProbability
-        );
+        const kalshiProb = gameData.kalshi.home.impliedProbability;
+        const espnProb = gameData.espn.homeImpliedProbability;
+        const diff = probabilityDifferencePct(kalshiProb, espnProb);
+        const isOvervaluing = kalshiProb > espnProb;
+        
         if (diff >= config.bot.mispricingThresholdPct * 100) {
           mispricings.push({
             game: gameData.espn.game,
             side: 'home',
             kalshiPrice: gameData.kalshi.home.price,
-            kalshiImpliedProbability: gameData.kalshi.home.impliedProbability,
+            kalshiImpliedProbability: kalshiProb,
             sportsbookOdds: gameData.espn.homeOdds!,
-            sportsbookImpliedProbability: gameData.espn.homeImpliedProbability,
-            difference: Math.abs(gameData.kalshi.home.impliedProbability - gameData.espn.homeImpliedProbability),
+            sportsbookImpliedProbability: espnProb,
+            difference: Math.abs(kalshiProb - espnProb),
             differencePct: diff,
+            isKalshiOvervaluing: isOvervaluing,
           });
         }
       }
 
       if (gameData.kalshi.away && gameData.espn.awayImpliedProbability !== undefined) {
-        const diff = probabilityDifferencePct(
-          gameData.kalshi.away.impliedProbability,
-          gameData.espn.awayImpliedProbability
-        );
+        const kalshiProb = gameData.kalshi.away.impliedProbability;
+        const espnProb = gameData.espn.awayImpliedProbability;
+        const diff = probabilityDifferencePct(kalshiProb, espnProb);
+        const isOvervaluing = kalshiProb > espnProb;
+        
         if (diff >= config.bot.mispricingThresholdPct * 100) {
           mispricings.push({
             game: gameData.espn.game,
             side: 'away',
             kalshiPrice: gameData.kalshi.away.price,
-            kalshiImpliedProbability: gameData.kalshi.away.impliedProbability,
+            kalshiImpliedProbability: kalshiProb,
             sportsbookOdds: gameData.espn.awayOdds!,
-            sportsbookImpliedProbability: gameData.espn.awayImpliedProbability,
-            difference: Math.abs(gameData.kalshi.away.impliedProbability - gameData.espn.awayImpliedProbability),
+            sportsbookImpliedProbability: espnProb,
+            difference: Math.abs(kalshiProb - espnProb),
             differencePct: diff,
+            isKalshiOvervaluing: isOvervaluing,
           });
         }
       }

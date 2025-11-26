@@ -75,7 +75,7 @@ export const config: Config = {
     },
     nfl: {
       espnPath: 'football/nfl/scoreboard',
-      kalshiSeries: 'KXNFLGAME',
+      kalshiSeries: 'kxnflgame', // Lowercase as shown in Kalshi URLs
     },
   },
   twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {
