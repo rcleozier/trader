@@ -9,47 +9,126 @@ export class MispricingService {
   findMispricings(
     kalshiMarkets: Market[],
     espnOdds: SportsbookOdds[]
-  ): Mispricing[] {
+  ): { mispricings: Mispricing[]; comparisons: Array<{
+      game: { awayTeam: string; homeTeam: string };
+      home: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
+      away: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
+    }> } {
     const mispricings: Mispricing[] = [];
-    let matchedCount = 0;
+    const comparisons: Array<{
+      game: { awayTeam: string; homeTeam: string };
+      home: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
+      away: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
+    }> = [];
+    const gameMap = new Map<string, { espn?: SportsbookOdds; kalshi: { home?: Market; away?: Market } }>();
 
-    console.log(`\n  Matching ${kalshiMarkets.length} Kalshi markets with ${espnOdds.length} ESPN games...`);
-
+    // Group Kalshi markets by game
     for (const market of kalshiMarkets) {
-      // Find matching ESPN game
-      const matchingOdds = this.findMatchingGame(market, espnOdds);
-      if (!matchingOdds) {
-        console.log(`    No ESPN match for: ${market.game.awayTeam} @ ${market.game.homeTeam}`);
-        continue;
+      const gameKey = `${market.game.awayTeam}-${market.game.homeTeam}`;
+      if (!gameMap.has(gameKey)) {
+        gameMap.set(gameKey, { kalshi: {} });
       }
-
-      matchedCount++;
-      console.log(`    ✓ Matched: ${market.game.awayTeam} @ ${market.game.homeTeam}`);
-
-      // Check both sides (home and away)
-      const homeMispricing = this.checkMispricing(
-        market,
-        matchingOdds,
-        'home'
-      );
-      if (homeMispricing) {
-        console.log(`      ⚠️  HOME mispricing detected: ${homeMispricing.differencePct.toFixed(2)}pp difference`);
-        mispricings.push(homeMispricing);
-      }
-
-      const awayMispricing = this.checkMispricing(
-        market,
-        matchingOdds,
-        'away'
-      );
-      if (awayMispricing) {
-        console.log(`      ⚠️  AWAY mispricing detected: ${awayMispricing.differencePct.toFixed(2)}pp difference`);
-        mispricings.push(awayMispricing);
+      const gameData = gameMap.get(gameKey)!;
+      if (market.side === 'home') {
+        gameData.kalshi.home = market;
+      } else {
+        gameData.kalshi.away = market;
       }
     }
 
-    console.log(`  Matched ${matchedCount} games, found ${mispricings.length} mispricings`);
-    return mispricings;
+    // Match with ESPN odds
+    for (const odds of espnOdds) {
+      const gameKey = `${odds.game.awayTeam}-${odds.game.homeTeam}`;
+      const reverseKey = `${odds.game.homeTeam}-${odds.game.awayTeam}`;
+      
+      const gameData = gameMap.get(gameKey) || gameMap.get(reverseKey);
+      if (gameData) {
+        gameData.espn = odds;
+      }
+    }
+
+    // Build comparisons and find mispricings
+    for (const [gameKey, gameData] of gameMap.entries()) {
+      if (!gameData.espn) continue;
+
+      const [awayTeam, homeTeam] = gameKey.split('-');
+      const comparison: typeof comparisons[0] = {
+        game: { awayTeam, homeTeam },
+        home: {},
+        away: {},
+      };
+
+      // Add ESPN data
+      if (gameData.espn.homeOdds !== undefined && gameData.espn.homeImpliedProbability !== undefined) {
+        comparison.home.espn = {
+          odds: gameData.espn.homeOdds,
+          prob: gameData.espn.homeImpliedProbability,
+        };
+      }
+      if (gameData.espn.awayOdds !== undefined && gameData.espn.awayImpliedProbability !== undefined) {
+        comparison.away.espn = {
+          odds: gameData.espn.awayOdds,
+          prob: gameData.espn.awayImpliedProbability,
+        };
+      }
+
+      // Add Kalshi data
+      if (gameData.kalshi.home) {
+        comparison.home.kalshi = {
+          price: gameData.kalshi.home.price,
+          prob: gameData.kalshi.home.impliedProbability,
+        };
+      }
+      if (gameData.kalshi.away) {
+        comparison.away.kalshi = {
+          price: gameData.kalshi.away.price,
+          prob: gameData.kalshi.away.impliedProbability,
+        };
+      }
+
+      comparisons.push(comparison);
+
+      // Check for mispricings
+      if (gameData.kalshi.home && gameData.espn.homeImpliedProbability !== undefined) {
+        const diff = probabilityDifferencePct(
+          gameData.kalshi.home.impliedProbability,
+          gameData.espn.homeImpliedProbability
+        );
+        if (diff >= config.bot.mispricingThresholdPct * 100) {
+          mispricings.push({
+            game: gameData.espn.game,
+            side: 'home',
+            kalshiPrice: gameData.kalshi.home.price,
+            kalshiImpliedProbability: gameData.kalshi.home.impliedProbability,
+            sportsbookOdds: gameData.espn.homeOdds!,
+            sportsbookImpliedProbability: gameData.espn.homeImpliedProbability,
+            difference: Math.abs(gameData.kalshi.home.impliedProbability - gameData.espn.homeImpliedProbability),
+            differencePct: diff,
+          });
+        }
+      }
+
+      if (gameData.kalshi.away && gameData.espn.awayImpliedProbability !== undefined) {
+        const diff = probabilityDifferencePct(
+          gameData.kalshi.away.impliedProbability,
+          gameData.espn.awayImpliedProbability
+        );
+        if (diff >= config.bot.mispricingThresholdPct * 100) {
+          mispricings.push({
+            game: gameData.espn.game,
+            side: 'away',
+            kalshiPrice: gameData.kalshi.away.price,
+            kalshiImpliedProbability: gameData.kalshi.away.impliedProbability,
+            sportsbookOdds: gameData.espn.awayOdds!,
+            sportsbookImpliedProbability: gameData.espn.awayImpliedProbability,
+            difference: Math.abs(gameData.kalshi.away.impliedProbability - gameData.espn.awayImpliedProbability),
+            differencePct: diff,
+          });
+        }
+      }
+    }
+
+    return { mispricings, comparisons };
   }
 
   /**
@@ -145,6 +224,7 @@ export class MispricingService {
     if (differencePct < config.bot.mispricingThresholdPct * 100) {
       return null;
     }
+
 
     return {
       game: market.game,

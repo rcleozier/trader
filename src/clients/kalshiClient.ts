@@ -41,7 +41,6 @@ export class KalshiClient {
       // Use only KXNBAGAME series ticker (singular, not KXNBAGAMES)
       const seriesTicker = 'KXNBAGAME';
       
-      console.log(`  Fetching markets with series_ticker=${seriesTicker}...`);
       const marketsResponse = await this.marketsApi.getMarkets(
         1000, // limit
         undefined, // cursor
@@ -54,18 +53,6 @@ export class KalshiClient {
       );
 
       const allMarkets = marketsResponse.data?.markets || [];
-      console.log(`  Found ${allMarkets.length} markets for series ${seriesTicker}`);
-      
-      // Log sample markets to see what we're getting
-      if (allMarkets.length > 0) {
-        console.log(`  Sample of first 10 NBA markets:`);
-        allMarkets.slice(0, 10).forEach((m: any, idx: number) => {
-          const title = m.title || 'No title';
-          const ticker = m.ticker || 'N/A';
-          const eventTicker = m.event_ticker || 'N/A';
-          console.log(`    ${idx + 1}. "${title}" (Ticker: ${ticker}, Event: ${eventTicker})`);
-        });
-      }
       
       // Filter for actual game markets (not proposition/futures markets)
       const gameMarkets = allMarkets.filter((m: any) => {
@@ -101,18 +88,7 @@ export class KalshiClient {
         return false;
       });
       
-      console.log(`  Filtered to ${gameMarkets.length} NBA game markets (excluding propositions)`);
-      
-      // Log details of found game markets
-      if (gameMarkets.length > 0) {
-        console.log(`  NBA Game Markets found:`);
-        gameMarkets.forEach((m: any, idx: number) => {
-          console.log(`    ${idx + 1}. ${m.title || 'No title'} (Ticker: ${m.ticker}, Event: ${m.event_ticker})`);
-        });
-      }
-      
       const parsed = this.parseMarkets(gameMarkets);
-      console.log(`  Successfully parsed ${parsed.length} NBA game markets`);
       
       return parsed;
     } catch (error: any) {
@@ -133,25 +109,15 @@ export class KalshiClient {
 
     for (const raw of rawMarkets) {
       try {
-        // Log raw market data for debugging
-        console.log(`\n    Raw Market Data:`);
-        console.log(`      Ticker: ${raw.ticker || 'N/A'}`);
-        console.log(`      Event Ticker: ${raw.event_ticker || 'N/A'}`);
-        console.log(`      Series Ticker: ${raw.series_ticker || 'N/A'}`);
-        console.log(`      Title: ${raw.title || 'N/A'}`);
-        console.log(`      Subtitle: ${raw.subtitle || 'N/A'}`);
-        
         // Extract game information from market title/ticker
         const gameInfo = this.extractGameInfo(raw);
         if (!gameInfo) {
-          console.log(`      ⚠️  Could not extract game info - skipping`);
           continue;
         }
 
         // Get current price (best bid or last price)
         const price = this.extractPrice(raw);
         if (price === null) {
-          console.log(`      ⚠️  No price found - skipping`);
           continue;
         }
 
@@ -169,11 +135,8 @@ export class KalshiClient {
           price,
           impliedProbability: impliedProb,
         });
-        
-        console.log(`      ✅ Parsed: ${gameInfo.awayTeam} @ ${gameInfo.homeTeam} - ${side}`);
-        console.log(`         Price: ${price}, Implied Prob: ${(impliedProb * 100).toFixed(2)}%`);
       } catch (error: any) {
-        console.warn(`      ❌ Failed to parse market ${raw.ticker || raw.id}:`, error.message);
+        // Silently skip invalid markets
       }
     }
 
@@ -336,19 +299,37 @@ export class KalshiClient {
 
   /**
    * Determine if market is for home or away team
+   * Ticker format: KXNBAGAME-25NOV28PHXSAC-SAC (last part indicates the team)
    */
   private determineSide(raw: any, game: Game): 'home' | 'away' {
-    const title = (raw.title || raw.name || '').toString().toUpperCase();
     const ticker = (raw.ticker || '').toString().toUpperCase();
+    const homeTeam = game.homeTeam.toUpperCase();
+    const awayTeam = game.awayTeam.toUpperCase();
 
-    // Check if title/ticker mentions home team first
-    if (title.includes(game.homeTeam.toUpperCase()) || ticker.includes(game.homeTeam.toUpperCase())) {
+    // Extract the team abbreviation from the end of the ticker (after last dash)
+    // Format: KXNBAGAME-25NOV28PHXSAC-SAC
+    const tickerParts = ticker.split('-');
+    if (tickerParts.length > 0) {
+      const lastPart = tickerParts[tickerParts.length - 1];
+      
+      // Check if the last part matches home or away team
+      if (lastPart === homeTeam || lastPart.includes(homeTeam)) {
+        return 'home';
+      }
+      if (lastPart === awayTeam || lastPart.includes(awayTeam)) {
+        return 'away';
+      }
+    }
+
+    // Fallback: check if ticker contains team abbreviations
+    if (ticker.includes(homeTeam)) {
       return 'home';
     }
-    
-    // Default to away if away team is mentioned, otherwise home
-    return title.includes(game.awayTeam.toUpperCase()) || ticker.includes(game.awayTeam.toUpperCase()) 
-      ? 'away' 
-      : 'home';
+    if (ticker.includes(awayTeam)) {
+      return 'away';
+    }
+
+    // Default to home if we can't determine
+    return 'home';
   }
 }

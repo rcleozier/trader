@@ -24,16 +24,9 @@ export class ESPNClient {
    */
   async fetchNBAGamesWithOdds(): Promise<SportsbookOdds[]> {
     try {
-      const fullUrl = this.client.defaults.baseURL + '/scoreboard';
-      console.log(`Fetching from ESPN API: ${fullUrl}`);
-      
-      // ESPN scoreboard endpoint
       const response = await this.client.get('/scoreboard');
       const events = response.data?.events || [];
-      console.log(`ESPN API returned ${events.length} events`);
-
       const results = this.parseGamesWithOdds(events);
-      console.log(`Parsed ${results.length} games with odds from ESPN`);
       return results;
     } catch (error: any) {
       console.error('ESPN API Error:', error.message);
@@ -69,24 +62,17 @@ export class ESPNClient {
       try {
         const game = this.extractGame(event);
         if (!game) {
-          console.log(`  Skipping event ${event.id}: could not extract game info`);
           continue;
         }
 
-        console.log(`  Processing game: ${game.awayTeam} @ ${game.homeTeam} (${game.id})`);
-
-        // ESPN odds are in competitions[0].odds array
         const odds = this.extractOdds(event);
         
         if (!odds.homeOdds && !odds.awayOdds) {
-          console.log(`    No odds found for ${game.awayTeam} @ ${game.homeTeam}`);
           continue;
         }
 
         const homeProb = odds.homeOdds ? impliedProbabilityFromAmerican(odds.homeOdds) : undefined;
         const awayProb = odds.awayOdds ? impliedProbabilityFromAmerican(odds.awayOdds) : undefined;
-
-        console.log(`    Odds found - Home: ${odds.homeOdds ? odds.homeOdds : 'N/A'} (${homeProb ? (homeProb * 100).toFixed(1) : 'N/A'}%), Away: ${odds.awayOdds ? odds.awayOdds : 'N/A'} (${awayProb ? (awayProb * 100).toFixed(1) : 'N/A'}%)`);
 
         results.push({
           gameId: game.id,
@@ -97,7 +83,7 @@ export class ESPNClient {
           awayImpliedProbability: awayProb,
         });
       } catch (error: any) {
-        console.warn(`  Failed to parse ESPN game ${event.id}:`, error.message);
+        // Silently skip invalid events
       }
     }
 
