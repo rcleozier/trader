@@ -44,7 +44,6 @@ export class KalshiClient {
       let allMarkets: any[] = [];
       
       for (const tickerToTry of uniqueSeriesTickers) {
-        console.log(`  🔍 Trying series_ticker=${tickerToTry}...`);
         try {
           const marketsResponse = await this.marketsApi.getMarkets(
             1000, // limit
@@ -58,23 +57,13 @@ export class KalshiClient {
           );
 
           const markets = marketsResponse.data?.markets || [];
-          console.log(`  📦 Received ${markets.length} markets for ${tickerToTry}`);
           if (markets.length > 0) {
             allMarkets = markets;
             break; // Found markets, stop trying other variations
           }
         } catch (error: any) {
-          console.log(`  ⚠️  Error with ${tickerToTry}: ${error.message}`);
+          // Silently try next variation
         }
-      }
-      
-      console.log(`  📦 Total markets found: ${allMarkets.length}`);
-      
-      if (allMarkets.length > 0) {
-        console.log(`  📋 Sample markets (first 5):`);
-        allMarkets.slice(0, 5).forEach((m: any, idx: number) => {
-          console.log(`    ${idx + 1}. ${m.title || 'No title'} (Ticker: ${m.ticker}, Event: ${m.event_ticker})`);
-        });
       }
       
       // Filter for actual game markets (not proposition/futures markets)
@@ -111,10 +100,7 @@ export class KalshiClient {
         return false;
       });
       
-      console.log(`  ✅ Filtered to ${gameMarkets.length} game markets (excluding propositions)`);
-      
       const parsed = this.parseMarkets(gameMarkets, sport);
-      console.log(`  ✅ Successfully parsed ${parsed.length} ${sport.toUpperCase()} markets`);
       
       return parsed;
     } catch (error: any) {
@@ -138,7 +124,6 @@ export class KalshiClient {
         // Extract game information from market title/ticker
         const gameInfo = this.extractGameInfo(raw, sport);
         if (!gameInfo) {
-          console.log(`    ⚠️  Skipping market: ${raw.title || raw.ticker} - could not extract game info`);
           continue;
         }
 
@@ -150,12 +135,6 @@ export class KalshiClient {
 
         // Determine side (home/away) from market
         const side = this.determineSide(raw, gameInfo);
-        
-        // Debug: log side determination for verification
-        const tickerParts = (raw.ticker || '').split('-');
-        const lastPart = tickerParts.length > 0 ? tickerParts[tickerParts.length - 1] : 'unknown';
-        const teamForMarket = side === 'home' ? gameInfo.homeTeam : gameInfo.awayTeam;
-        console.log(`    ✓ Market: ${raw.title || raw.ticker} | Ticker team: ${lastPart} | Assigned to: ${teamForMarket} (${side})`);
 
         const impliedProb = impliedProbabilityFromKalshiPrice(price);
         markets.push({
@@ -333,11 +312,6 @@ export class KalshiClient {
           homeAbbrev = result.home;
         }
       }
-    }
-    
-    // Debug logging if extraction failed
-    if (!awayAbbrev || !homeAbbrev) {
-      console.log(`    ⚠️  Failed to extract teams from: "${title}" (Ticker: ${ticker}, Event: ${eventTicker})`);
     }
     
     if (!awayAbbrev || !homeAbbrev) {
@@ -542,7 +516,6 @@ export class KalshiClient {
     }
 
     // Default to home if we can't determine (shouldn't happen with valid data)
-    console.log(`    ⚠️  Could not determine side for ticker: ${ticker}, homeTeam: ${homeTeam}, awayTeam: ${awayTeam}`);
     return 'home';
   }
 }
