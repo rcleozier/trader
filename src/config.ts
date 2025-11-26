@@ -14,6 +14,16 @@ interface Config {
   espn: {
     apiBaseUrl: string;
   };
+  sports: {
+    nba: {
+      espnPath: string;
+      kalshiSeries: string;
+    };
+    nfl: {
+      espnPath: string;
+      kalshiSeries: string;
+    };
+  };
   twilio?: {
     accountSid: string;
     authToken: string;
@@ -56,7 +66,17 @@ export const config: Config = {
     privateKeyPem: getPrivateKeyPem(),
   },
   espn: {
-    apiBaseUrl: getOptionalEnv('ESPN_API_BASE_URL', 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba') || '',
+    apiBaseUrl: getOptionalEnv('ESPN_API_BASE_URL', 'https://site.api.espn.com/apis/site/v2/sports/') || '',
+  },
+  sports: {
+    nba: {
+      espnPath: 'basketball/nba/scoreboard',
+      kalshiSeries: 'KXNBAGAME',
+    },
+    nfl: {
+      espnPath: 'football/nfl/scoreboard',
+      kalshiSeries: 'KXNFLGAME',
+    },
   },
   twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {
     accountSid: requireEnv('TWILIO_ACCOUNT_SID'),

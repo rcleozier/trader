@@ -20,11 +20,11 @@ export class ESPNClient {
   }
 
   /**
-   * Fetch NBA games with odds from ESPN
+   * Fetch games with odds from ESPN for a specific sport
    */
-  async fetchNBAGamesWithOdds(): Promise<SportsbookOdds[]> {
+  async fetchGamesWithOdds(sportPath: string): Promise<SportsbookOdds[]> {
     try {
-      const response = await this.client.get('/scoreboard');
+      const response = await this.client.get(sportPath);
       const events = response.data?.events || [];
       const results = this.parseGamesWithOdds(events);
       return results;
@@ -126,12 +126,21 @@ export class ESPNClient {
     if (competitions.length === 0) return {};
 
     const competition = competitions[0];
+    const competitors = competition.competitors || [];
     
-    // ESPN has odds in two places:
-    // 1. competition.odds array (provider-based)
-    // 2. competition.moneyline object (direct moneyline odds)
+    // First, try to get odds directly from competitors array
+    // Each competitor has odds.moneyLine field directly
+    const homeCompetitor = competitors.find((c: any) => c.homeAway === 'home');
+    const awayCompetitor = competitors.find((c: any) => c.homeAway === 'away');
     
-    // Try the direct moneyline object first (simpler structure)
+    if (homeCompetitor?.odds?.moneyLine !== undefined && awayCompetitor?.odds?.moneyLine !== undefined) {
+      return {
+        homeOdds: homeCompetitor.odds.moneyLine,
+        awayOdds: awayCompetitor.odds.moneyLine,
+      };
+    }
+    
+    // Fall back to competition.moneyline object
     if (competition.moneyline) {
       const ml = competition.moneyline;
       const homeOddsStr = ml.home?.close?.odds || ml.home?.open?.odds;
@@ -153,7 +162,7 @@ export class ESPNClient {
       // Look for moneyline in the odds array
       // The structure has awayTeamOdds and homeTeamOdds with moneyLine field
       for (const oddsObj of oddsArray) {
-        if (oddsObj.awayTeamOdds?.moneyLine && oddsObj.homeTeamOdds?.moneyLine) {
+        if (oddsObj.awayTeamOdds?.moneyLine !== undefined && oddsObj.homeTeamOdds?.moneyLine !== undefined) {
           return {
             homeOdds: oddsObj.homeTeamOdds.moneyLine,
             awayOdds: oddsObj.awayTeamOdds.moneyLine,

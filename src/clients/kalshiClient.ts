@@ -31,15 +31,11 @@ export class KalshiClient {
   }
 
   /**
-   * Fetch NBA markets from Kalshi
-   * Focuses on KXNBAGAME series for live games
+   * Fetch markets from Kalshi for a specific series
    */
-  async fetchNBAMarkets(): Promise<Market[]> {
+  async fetchMarkets(seriesTicker: string, sport: 'nba' | 'nfl' = 'nba'): Promise<Market[]> {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
-      
-      // Use only KXNBAGAME series ticker (singular, not KXNBAGAMES)
-      const seriesTicker = 'KXNBAGAME';
       
       const marketsResponse = await this.marketsApi.getMarkets(
         1000, // limit
@@ -88,7 +84,7 @@ export class KalshiClient {
         return false;
       });
       
-      const parsed = this.parseMarkets(gameMarkets);
+      const parsed = this.parseMarkets(gameMarkets, sport);
       
       return parsed;
     } catch (error: any) {
@@ -104,13 +100,13 @@ export class KalshiClient {
   /**
    * Parse raw Kalshi market data into our Market format
    */
-  private parseMarkets(rawMarkets: any[]): Market[] {
+  private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' = 'nba'): Market[] {
     const markets: Market[] = [];
 
     for (const raw of rawMarkets) {
       try {
         // Extract game information from market title/ticker
-        const gameInfo = this.extractGameInfo(raw);
+        const gameInfo = this.extractGameInfo(raw, sport);
         if (!gameInfo) {
           continue;
         }
@@ -148,13 +144,13 @@ export class KalshiClient {
    * Kalshi ticker format: KXNBAGAME-25NOV28DALLAL-LAL
    * Event ticker format: KXNBAGAME-25NOV28DALLAL (contains both team abbreviations)
    */
-  private extractGameInfo(raw: any): Game | null {
+  private extractGameInfo(raw: any, sport: 'nba' | 'nfl' = 'nba'): Game | null {
     const title = (raw.title || raw.name || '').toString();
     const ticker = (raw.ticker || '').toString();
     const eventTicker = (raw.event_ticker || '').toString();
     
-    // NBA team abbreviation mapping
-    const teamAbbrevMap: { [key: string]: string } = {
+    // Team abbreviation mapping for NBA and NFL
+    const nbaTeamAbbrevMap: { [key: string]: string } = {
       'ATL': 'ATL', 'BOS': 'BOS', 'BKN': 'BKN', 'CHA': 'CHA', 'CHI': 'CHI',
       'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN', 'DET': 'DET', 'GS': 'GS',
       'GSW': 'GS', 'HOU': 'HOU', 'IND': 'IND', 'LAC': 'LAC', 'LAL': 'LAL',
@@ -164,14 +160,27 @@ export class KalshiClient {
       'SAS': 'SA', 'TOR': 'TOR', 'UTA': 'UTA', 'WAS': 'WAS', 'WSH': 'WAS'
     };
     
+    const nflTeamAbbrevMap: { [key: string]: string } = {
+      'ARI': 'ARI', 'ATL': 'ATL', 'BAL': 'BAL', 'BUF': 'BUF', 'CAR': 'CAR',
+      'CHI': 'CHI', 'CIN': 'CIN', 'CLE': 'CLE', 'DAL': 'DAL', 'DEN': 'DEN',
+      'DET': 'DET', 'GB': 'GB', 'HOU': 'HOU', 'IND': 'IND', 'JAX': 'JAX',
+      'KC': 'KC', 'LV': 'LV', 'LAR': 'LAR', 'LAC': 'LAC', 'MIA': 'MIA',
+      'MIN': 'MIN', 'NE': 'NE', 'NO': 'NO', 'NYG': 'NYG', 'NYJ': 'NYJ',
+      'PHI': 'PHI', 'PIT': 'PIT', 'SF': 'SF', 'SEA': 'SEA', 'TB': 'TB',
+      'TEN': 'TEN', 'WAS': 'WAS', 'WSH': 'WAS'
+    };
+    
+    const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : nbaTeamAbbrevMap;
+    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 'KXNBAGAME';
+    
     // Try to extract from event ticker first (most reliable)
-    // Format: KXNBAGAME-25NOV28DALLAL where DALLAL = DAL + LAL
+    // Format: KXNBAGAME-25NOV28DALLAL or KXNFLGAME-25NOV28DALLAL
     let awayAbbrev: string | null = null;
     let homeAbbrev: string | null = null;
     
     if (eventTicker) {
       // Extract the team abbreviations part (after date)
-      const eventMatch = eventTicker.match(/KXNBAGAME-\d+([A-Z]+)/i);
+      const eventMatch = eventTicker.match(new RegExp(`${seriesPrefix}-\\d+([A-Z]+)`, 'i'));
       if (eventMatch) {
         const combinedAbbrev = eventMatch[1];
         // Try to split combined abbreviations (e.g., DALLAL = DAL + LAL)
@@ -196,9 +205,9 @@ export class KalshiClient {
       }
     }
     
-    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL
+    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL or KXNFLGAME-25NOV28DALLAL-LAL
     if (!awayAbbrev && ticker) {
-      const tickerMatch = ticker.match(/KXNBAGAME-\d+([A-Z]+)-([A-Z]+)/i);
+      const tickerMatch = ticker.match(new RegExp(`${seriesPrefix}-\\d+([A-Z]+)-([A-Z]+)`, 'i'));
       if (tickerMatch) {
         const combined = tickerMatch[1];
         const sideAbbrev = tickerMatch[2];
@@ -232,8 +241,8 @@ export class KalshiClient {
         const awayName = titleMatch[1]?.trim() || '';
         const homeName = titleMatch[2]?.trim() || '';
         
-        // Simple name to abbrev mapping for common cases
-        const nameToAbbrev: { [key: string]: string } = {
+        // Simple name to abbrev mapping for NBA and NFL
+        const nbaNameToAbbrev: { [key: string]: string } = {
           'dallas': 'DAL', 'los angeles l': 'LAL', 'los angeles c': 'LAC',
           'memphis': 'MEM', 'san antonio': 'SA', 'denver': 'DEN',
           'sacramento': 'SAC', 'utah': 'UTA', 'phoenix': 'PHX',
@@ -245,6 +254,21 @@ export class KalshiClient {
           'toronto': 'TOR', 'minnesota': 'MIN', 'new york': 'NY',
           'new orleans': 'NO', 'atlanta': 'ATL', 'boston': 'BOS'
         };
+        
+        const nflNameToAbbrev: { [key: string]: string } = {
+          'arizona': 'ARI', 'atlanta': 'ATL', 'baltimore': 'BAL', 'buffalo': 'BUF',
+          'carolina': 'CAR', 'chicago': 'CHI', 'cincinnati': 'CIN', 'cleveland': 'CLE',
+          'dallas': 'DAL', 'denver': 'DEN', 'detroit': 'DET', 'green bay': 'GB',
+          'houston': 'HOU', 'indianapolis': 'IND', 'jacksonville': 'JAX', 'kansas city': 'KC',
+          'las vegas': 'LV', 'oakland': 'LV', 'raiders': 'LV', 'la rams': 'LAR',
+          'los angeles rams': 'LAR', 'la chargers': 'LAC', 'los angeles chargers': 'LAC',
+          'miami': 'MIA', 'minnesota': 'MIN', 'new england': 'NE', 'new orleans': 'NO',
+          'ny giants': 'NYG', 'new york giants': 'NYG', 'ny jets': 'NYJ', 'new york jets': 'NYJ',
+          'philadelphia': 'PHI', 'pittsburgh': 'PIT', 'san francisco': 'SF', 'seattle': 'SEA',
+          'tampa bay': 'TB', 'tennessee': 'TEN', 'washington': 'WAS'
+        };
+        
+        const nameToAbbrev = sport === 'nfl' ? nflNameToAbbrev : nbaNameToAbbrev;
         
         const awayKey = awayName.toLowerCase();
         const homeKey = homeName.toLowerCase();

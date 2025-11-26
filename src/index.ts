@@ -5,98 +5,112 @@ import { MispricingService } from './services/mispricingService';
 import { NotificationService } from './services/notificationService';
 import { config } from './config';
 
-async function runMispricingCheck(): Promise<void> {
-  console.log('\n' + '='.repeat(80));
-  console.log('🔍 Starting NBA Mispricing Check');
-  console.log('='.repeat(80));
+async function runMispricingCheckForSport(sport: 'nba' | 'nfl'): Promise<void> {
+  const sportConfig = config.sports[sport];
+  const sportEmoji = sport === 'nba' ? '🏀' : '🏈';
+  const sportName = sport.toUpperCase();
+  
+  console.log(`\n${sportEmoji} ${sportName} Mispricing Check`);
+  console.log('─'.repeat(80));
   const startTime = Date.now();
 
   try {
     // Fetch data from both sources
     const kalshiClient = new KalshiClient();
-    const kalshiMarkets = await kalshiClient.fetchNBAMarkets();
+    const kalshiMarkets = await kalshiClient.fetchMarkets(sportConfig.kalshiSeries, sport);
     
     const espnClient = new ESPNClient();
-    const espnOdds = await espnClient.fetchNBAGamesWithOdds();
+    const espnOdds = await espnClient.fetchGamesWithOdds(sportConfig.espnPath);
 
     // Find mispricings and build comparisons
     const mispricingService = new MispricingService();
     const { mispricings, comparisons } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
 
     // Display unified comparison table
-    console.log('\n' + '='.repeat(100));
-    console.log('📊 ESPN vs KALSHI ODDS COMPARISON');
-    console.log('='.repeat(100));
-    console.log('');
-    
-    for (const comp of comparisons) {
-      const gameLabel = `${comp.game.awayTeam} @ ${comp.game.homeTeam}`;
-      console.log(`🏀 ${gameLabel}`);
-      console.log('─'.repeat(100));
+    if (comparisons.length > 0) {
+      console.log(`\n${sportEmoji} ${sportName} Games:`);
       
-      // Home team comparison
-      if (comp.home.espn || comp.home.kalshi) {
-        const espnStr = comp.home.espn 
-          ? `${comp.home.espn.odds > 0 ? '+' : ''}${comp.home.espn.odds} → ${(comp.home.espn.prob * 100).toFixed(1)}%`
-          : 'N/A';
-        const kalshiStr = comp.home.kalshi
-          ? `Price: ${comp.home.kalshi.price} → ${(comp.home.kalshi.prob * 100).toFixed(1)}%`
-          : 'N/A';
-        const diff = comp.home.espn && comp.home.kalshi
-          ? `${Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100}pp`
-          : 'N/A';
-        const mispricingFlag = comp.home.espn && comp.home.kalshi && 
-          Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100
-          ? ' ⚠️ MISPRICING'
-          : '';
-        console.log(`  HOME (${comp.game.homeTeam}):`);
-        console.log(`    ESPN:    ${espnStr.padEnd(25)} Kalshi: ${kalshiStr.padEnd(25)} Diff: ${diff}${mispricingFlag}`);
+      for (const comp of comparisons) {
+        const gameLabel = `${comp.game.awayTeam} @ ${comp.game.homeTeam}`;
+        console.log(`  ${gameLabel}`);
+        // Home team comparison
+        if (comp.home.espn || comp.home.kalshi) {
+          const espnStr = comp.home.espn 
+            ? `${comp.home.espn.odds > 0 ? '+' : ''}${comp.home.espn.odds} → ${(comp.home.espn.prob * 100).toFixed(1)}%`
+            : 'N/A';
+          const kalshiStr = comp.home.kalshi
+            ? `Price: ${comp.home.kalshi.price} → ${(comp.home.kalshi.prob * 100).toFixed(1)}%`
+            : 'N/A';
+          const diff = comp.home.espn && comp.home.kalshi
+            ? `${(Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100).toFixed(1)}pp`
+            : 'N/A';
+          const mispricingFlag = comp.home.espn && comp.home.kalshi && 
+            Math.abs(comp.home.espn.prob - comp.home.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100
+            ? ' ⚠️ MISPRICING'
+            : '';
+          console.log(`    HOME (${comp.game.homeTeam}): ESPN: ${espnStr.padEnd(20)} Kalshi: ${kalshiStr.padEnd(20)} Diff: ${diff}${mispricingFlag}`);
+        }
+        
+        // Away team comparison
+        if (comp.away.espn || comp.away.kalshi) {
+          const espnStr = comp.away.espn 
+            ? `${comp.away.espn.odds > 0 ? '+' : ''}${comp.away.espn.odds} → ${(comp.away.espn.prob * 100).toFixed(1)}%`
+            : 'N/A';
+          const kalshiStr = comp.away.kalshi
+            ? `Price: ${comp.away.kalshi.price} → ${(comp.away.kalshi.prob * 100).toFixed(1)}%`
+            : 'N/A';
+          const diff = comp.away.espn && comp.away.kalshi
+            ? `${(Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100).toFixed(1)}pp`
+            : 'N/A';
+          const mispricingFlag = comp.away.espn && comp.away.kalshi && 
+            Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100
+            ? ' ⚠️ MISPRICING'
+            : '';
+          console.log(`    AWAY (${comp.game.awayTeam}): ESPN: ${espnStr.padEnd(20)} Kalshi: ${kalshiStr.padEnd(20)} Diff: ${diff}${mispricingFlag}`);
+        }
+        console.log('');
       }
       
-      // Away team comparison
-      if (comp.away.espn || comp.away.kalshi) {
-        const espnStr = comp.away.espn 
-          ? `${comp.away.espn.odds > 0 ? '+' : ''}${comp.away.espn.odds} → ${(comp.away.espn.prob * 100).toFixed(1)}%`
-          : 'N/A';
-        const kalshiStr = comp.away.kalshi
-          ? `Price: ${comp.away.kalshi.price} → ${(comp.away.kalshi.prob * 100).toFixed(1)}%`
-          : 'N/A';
-        const diff = comp.away.espn && comp.away.kalshi
-          ? `${Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100}pp`
-          : 'N/A';
-        const mispricingFlag = comp.away.espn && comp.away.kalshi && 
-          Math.abs(comp.away.espn.prob - comp.away.kalshi.prob) * 100 >= config.bot.mispricingThresholdPct * 100
-          ? ' ⚠️ MISPRICING'
-          : '';
-        console.log(`  AWAY (${comp.game.awayTeam}):`);
-        console.log(`    ESPN:    ${espnStr.padEnd(25)} Kalshi: ${kalshiStr.padEnd(25)} Diff: ${diff}${mispricingFlag}`);
-      }
-      
-      console.log('');
+      console.log(`  ✅ ${sportName}: Found ${mispricings.length} mispricings above ${config.bot.mispricingThresholdPct * 100}% threshold`);
+    } else {
+      console.log(`  ℹ️  ${sportName}: No games found`);
     }
-    
-    console.log('='.repeat(100));
-    console.log(`✅ Found ${mispricings.length} mispricings above ${config.bot.mispricingThresholdPct * 100}% threshold`);
-    console.log('='.repeat(100));
 
     // Send alert for mispricings
     const notificationService = new NotificationService();
     await notificationService.sendMispricingAlert(mispricings);
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`\n⏱️  Completed in ${duration}s`);
+    console.log(`  ⏱️  ${sportName} check completed in ${duration}s`);
   } catch (error: any) {
-    console.error('\n❌ Error during mispricing check:', error.message);
+    console.error(`\n❌ Error during ${sport} mispricing check:`, error.message);
     if (error.stack) {
       console.error('Stack trace:', error.stack);
     }
-    throw error;
+    // Don't throw - continue with other sports
   }
+}
+
+async function runMispricingCheck(): Promise<void> {
+  console.log('\n' + '='.repeat(100));
+  console.log('🔍 Starting Multi-Sport Mispricing Check');
+  console.log('='.repeat(100));
+  console.log(`Mispricing threshold: ${config.bot.mispricingThresholdPct * 100}%`);
+  
+  const allMispricings: any[] = [];
+  
+  // Run checks for both NBA and NFL
+  await runMispricingCheckForSport('nba');
+  await runMispricingCheckForSport('nfl');
+  
+  console.log('\n' + '='.repeat(100));
+  console.log(`✅ Total mispricings found: ${allMispricings.length}`);
+  console.log('='.repeat(100));
 }
 
 // Main execution
 async function main(): Promise<void> {
-  console.log('NBA Mispricing Bot started');
+  console.log('Multi-Sport Mispricing Bot started');
   console.log(`Mispricing threshold: ${config.bot.mispricingThresholdPct * 100}%`);
 
   // Run once immediately
