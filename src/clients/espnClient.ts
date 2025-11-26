@@ -4,34 +4,31 @@ import { SportsbookOdds, Game } from '../types/markets';
 import { impliedProbabilityFromAmerican } from '../lib/odds';
 
 export class ESPNClient {
-  private client = axios.create({
-    baseURL: config.espn.apiBaseUrl,
-    timeout: 10000,
-  });
+  private client;
+
+  constructor() {
+    // Normalize base URL - remove /scoreboard if it's already there
+    let baseURL = config.espn.apiBaseUrl.replace(/\/$/, ''); // Remove trailing slash
+    if (baseURL.endsWith('/scoreboard')) {
+      baseURL = baseURL.replace(/\/scoreboard$/, '');
+    }
+    
+    this.client = axios.create({
+      baseURL: baseURL,
+      timeout: 10000,
+    });
+  }
 
   /**
    * Fetch NBA games with odds from ESPN
    */
   async fetchNBAGamesWithOdds(): Promise<SportsbookOdds[]> {
     try {
-      // Normalize base URL - remove trailing slash if present
-      const baseUrl = config.espn.apiBaseUrl.replace(/\/$/, '');
-      
-      // Check if base URL already includes /scoreboard
-      let endpoint: string;
-      if (baseUrl.endsWith('/scoreboard')) {
-        // Base URL is already the full endpoint, use empty string
-        endpoint = '';
-      } else {
-        // Append /scoreboard
-        endpoint = '/scoreboard';
-      }
-      
-      const fullUrl = baseUrl + endpoint;
+      const fullUrl = this.client.defaults.baseURL + '/scoreboard';
       console.log(`Fetching from ESPN API: ${fullUrl}`);
       
       // ESPN scoreboard endpoint
-      const response = await this.client.get(endpoint);
+      const response = await this.client.get('/scoreboard');
       const events = response.data?.events || [];
       console.log(`ESPN API returned ${events.length} events`);
 

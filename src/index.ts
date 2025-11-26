@@ -20,11 +20,15 @@ async function runMispricingCheck(): Promise<void> {
     
     if (kalshiMarkets.length > 0) {
       console.log('\nKalshi Markets Summary:');
-      kalshiMarkets.slice(0, 5).forEach((market, idx) => {
-        console.log(`  ${idx + 1}. ${market.game.awayTeam} @ ${market.game.homeTeam} - ${market.side} (Price: ${market.price}, Prob: ${(market.impliedProbability * 100).toFixed(2)}%)`);
+      kalshiMarkets.slice(0, 10).forEach((market, idx) => {
+        const title = market.title || market.ticker || 'No title';
+        const teamMatch = `${market.game.awayTeam} @ ${market.game.homeTeam}`;
+        console.log(`  ${idx + 1}. ${title}`);
+        console.log(`     Teams: ${teamMatch} | Side: ${market.side} | Price: ${market.price} | Prob: ${(market.impliedProbability * 100).toFixed(2)}%`);
+        console.log(`     Ticker: ${market.ticker}`);
       });
-      if (kalshiMarkets.length > 5) {
-        console.log(`  ... and ${kalshiMarkets.length - 5} more`);
+      if (kalshiMarkets.length > 10) {
+        console.log(`  ... and ${kalshiMarkets.length - 10} more`);
       }
     }
 
