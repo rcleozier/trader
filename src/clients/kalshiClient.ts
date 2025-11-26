@@ -32,14 +32,14 @@ export class KalshiClient {
 
   /**
    * Fetch NBA markets from Kalshi
-   * Focuses on KXNBAGAMES series for live games
+   * Focuses on KXNBAGAME series for live games
    */
   async fetchNBAMarkets(): Promise<Market[]> {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
       
-      // Use only KXNBAGAMES series ticker
-      const seriesTicker = 'KXNBAGAMES';
+      // Use only KXNBAGAME series ticker (singular, not KXNBAGAMES)
+      const seriesTicker = 'KXNBAGAME';
       
       console.log(`  Fetching markets with series_ticker=${seriesTicker}...`);
       const marketsResponse = await this.marketsApi.getMarkets(
