@@ -37,20 +37,38 @@ export class KalshiClient {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
       
-      console.log(`  🔍 Fetching ${sport.toUpperCase()} markets with series_ticker=${seriesTicker}...`);
-      const marketsResponse = await this.marketsApi.getMarkets(
-        1000, // limit
-        undefined, // cursor
-        undefined, // eventTicker
-        seriesTicker, // seriesTicker
-        undefined, // maxCloseTs
-        currentTime, // minCloseTs - markets closing now or later (live games)
-        'open', // status
-        undefined // tickers
-      );
+      // Try both lowercase and uppercase versions of the series ticker
+      const seriesTickersToTry = [seriesTicker, seriesTicker.toUpperCase(), seriesTicker.toLowerCase()];
+      const uniqueSeriesTickers = Array.from(new Set(seriesTickersToTry));
+      
+      let allMarkets: any[] = [];
+      
+      for (const tickerToTry of uniqueSeriesTickers) {
+        console.log(`  🔍 Trying series_ticker=${tickerToTry}...`);
+        try {
+          const marketsResponse = await this.marketsApi.getMarkets(
+            1000, // limit
+            undefined, // cursor
+            undefined, // eventTicker
+            tickerToTry, // seriesTicker
+            undefined, // maxCloseTs
+            currentTime, // minCloseTs - markets closing now or later (live games)
+            'open', // status
+            undefined // tickers
+          );
 
-      const allMarkets = marketsResponse.data?.markets || [];
-      console.log(`  📦 Received ${allMarkets.length} total markets from Kalshi for ${seriesTicker}`);
+          const markets = marketsResponse.data?.markets || [];
+          console.log(`  📦 Received ${markets.length} markets for ${tickerToTry}`);
+          if (markets.length > 0) {
+            allMarkets = markets;
+            break; // Found markets, stop trying other variations
+          }
+        } catch (error: any) {
+          console.log(`  ⚠️  Error with ${tickerToTry}: ${error.message}`);
+        }
+      }
+      
+      console.log(`  📦 Total markets found: ${allMarkets.length}`);
       
       if (allMarkets.length > 0) {
         console.log(`  📋 Sample markets (first 5):`);
@@ -120,6 +138,7 @@ export class KalshiClient {
         // Extract game information from market title/ticker
         const gameInfo = this.extractGameInfo(raw, sport);
         if (!gameInfo) {
+          console.log(`    ⚠️  Skipping market: ${raw.title || raw.ticker} - could not extract game info`);
           continue;
         }
 
@@ -131,6 +150,12 @@ export class KalshiClient {
 
         // Determine side (home/away) from market
         const side = this.determineSide(raw, gameInfo);
+        
+        // Debug: log side determination for verification
+        const tickerParts = (raw.ticker || '').split('-');
+        const lastPart = tickerParts.length > 0 ? tickerParts[tickerParts.length - 1] : 'unknown';
+        const teamForMarket = side === 'home' ? gameInfo.homeTeam : gameInfo.awayTeam;
+        console.log(`    ✓ Market: ${raw.title || raw.ticker} | Ticker team: ${lastPart} | Assigned to: ${teamForMarket} (${side})`);
 
         const impliedProb = impliedProbabilityFromKalshiPrice(price);
         markets.push({
@@ -183,7 +208,7 @@ export class KalshiClient {
     };
     
     const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : nbaTeamAbbrevMap;
-    const seriesPrefix = sport === 'nfl' ? 'kxnflgame' : 'KXNBAGAME'; // NFL uses lowercase
+    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 'KXNBAGAME'; // Both use uppercase in API
     
     // Try to extract from event ticker first (most reliable)
     // Format: KXNBAGAME-25NOV28DALLAL or kxnflgame-25DEC01NYGNE
@@ -201,44 +226,92 @@ export class KalshiClient {
           [3, 3], [3, 4], [4, 3], [3, 2], [2, 3], [4, 4], [2, 4], [4, 2]
         ];
         
+        // Handle partial abbreviations mapping (e.g., "LA" -> "LAR" for Rams)
+        const partialToFull: { [key: string]: string } = sport === 'nfl' ? {
+          'LA': 'LAR', // Los Angeles Rams
+        } : {};
+        
         for (const [len1, len2] of possibleSplits) {
           if (combinedAbbrev.length >= len1 + len2) {
             const abbrev1 = combinedAbbrev.substring(0, len1);
             const abbrev2 = combinedAbbrev.substring(len1, len1 + len2);
             
             // Check if both are valid team abbreviations
-            if (teamAbbrevMap[abbrev1] && teamAbbrevMap[abbrev2]) {
-              awayAbbrev = teamAbbrevMap[abbrev1];
-              homeAbbrev = teamAbbrevMap[abbrev2];
+            // Handle partial abbreviations (e.g., "LA" for "LAR")
+            let abbrev1Full = teamAbbrevMap[abbrev1];
+            let abbrev2Full = teamAbbrevMap[abbrev2];
+            
+            // Try partial mapping if direct lookup failed
+            if (!abbrev1Full && partialToFull[abbrev1]) {
+              abbrev1Full = teamAbbrevMap[partialToFull[abbrev1]];
+            }
+            if (!abbrev2Full && partialToFull[abbrev2]) {
+              abbrev2Full = teamAbbrevMap[partialToFull[abbrev2]];
+            }
+            
+            // Also try if abbrev1/abbrev2 is a prefix of a valid team abbrev
+            if (!abbrev1Full || !abbrev2Full) {
+              for (const [key, value] of Object.entries(teamAbbrevMap)) {
+                if (!abbrev1Full && key.startsWith(abbrev1) && key.length <= abbrev1.length + 1) {
+                  abbrev1Full = value;
+                }
+                if (!abbrev2Full && key.startsWith(abbrev2) && key.length <= abbrev2.length + 1) {
+                  abbrev2Full = value;
+                }
+              }
+            }
+            
+            if (abbrev1Full && abbrev2Full) {
+              awayAbbrev = abbrev1Full;
+              homeAbbrev = abbrev2Full;
               break;
             }
           }
         }
+        
+        // Special case: if we have LAARI, try LA (2) + ARI (3)
+        if (!awayAbbrev && combinedAbbrev === 'LAARI' && sport === 'nfl') {
+          awayAbbrev = 'LAR';
+          homeAbbrev = 'ARI';
+        }
       }
     }
     
-    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL or kxnflgame-25DEC01NYGNE-NYG
+    // Fallback: Try from ticker format KXNBAGAME-25NOV28DALLAL-LAL or KXNFLGAME-25DEC07LAARI-LA
     if (!awayAbbrev && ticker) {
       const tickerMatch = ticker.match(new RegExp(`${seriesPrefix}-\\d+([A-Z]+)-([A-Z]+)`, 'i'));
       if (tickerMatch) {
         const combined = tickerMatch[1];
         const sideAbbrev = tickerMatch[2];
         
+        // Handle partial abbreviations (e.g., "LA" should map to "LAR" for Rams)
+        const partialAbbrevMap: { [key: string]: string } = {
+          'LA': 'LAR', // Los Angeles Rams
+          'LAC': 'LAC', // Los Angeles Chargers (full)
+        };
+        const fullSideAbbrev = partialAbbrevMap[sideAbbrev] || sideAbbrev;
+        
         // Try to split combined to find the other team
-        for (const [len1, len2] of [[3, 3], [3, 4], [4, 3], [3, 2], [2, 3]]) {
+        for (const [len1, len2] of [[3, 3], [3, 4], [4, 3], [3, 2], [2, 3], [2, 4], [4, 2]]) {
           if (combined.length >= len1 + len2) {
             const abbrev1 = combined.substring(0, len1);
             const abbrev2 = combined.substring(len1, len1 + len2);
             
-            if (teamAbbrevMap[abbrev1] && teamAbbrevMap[abbrev2]) {
-              if (teamAbbrevMap[abbrev1] === sideAbbrev || abbrev1 === sideAbbrev) {
-                awayAbbrev = teamAbbrevMap[abbrev2];
-                homeAbbrev = teamAbbrevMap[abbrev1];
-              } else if (teamAbbrevMap[abbrev2] === sideAbbrev || abbrev2 === sideAbbrev) {
-                awayAbbrev = teamAbbrevMap[abbrev1];
-                homeAbbrev = teamAbbrevMap[abbrev2];
+            // Check if either matches the side abbreviation (full or partial)
+            const abbrev1Full = teamAbbrevMap[abbrev1];
+            const abbrev2Full = teamAbbrevMap[abbrev2];
+            
+            if (abbrev1Full && abbrev2Full) {
+              // Check if side abbrev matches either team (handling partial matches)
+              if (abbrev1Full === fullSideAbbrev || abbrev1 === sideAbbrev || abbrev1Full.startsWith(sideAbbrev)) {
+                awayAbbrev = abbrev2Full;
+                homeAbbrev = abbrev1Full;
+                break;
+              } else if (abbrev2Full === fullSideAbbrev || abbrev2 === sideAbbrev || abbrev2Full.startsWith(sideAbbrev)) {
+                awayAbbrev = abbrev1Full;
+                homeAbbrev = abbrev2Full;
+                break;
               }
-              break;
             }
           }
         }
@@ -247,53 +320,24 @@ export class KalshiClient {
     
     // Last resort: Try to parse from title
     if (!awayAbbrev) {
-      const titleMatch = title.match(/([A-Za-z\s]+?)\s*(?:@|vs|v\.?)\s*([A-Za-z\s]+?)(?:\s|$|:)/i);
-      if (titleMatch) {
-        // Try to map full names to abbreviations (basic mapping)
-        const awayName = titleMatch[1]?.trim() || '';
-        const homeName = titleMatch[2]?.trim() || '';
-        
-        // Simple name to abbrev mapping for NBA and NFL
-        const nbaNameToAbbrev: { [key: string]: string } = {
-          'dallas': 'DAL', 'los angeles l': 'LAL', 'los angeles c': 'LAC',
-          'memphis': 'MEM', 'san antonio': 'SA', 'denver': 'DEN',
-          'sacramento': 'SAC', 'utah': 'UTA', 'phoenix': 'PHX',
-          'oklahoma city': 'OKC', 'orlando': 'ORL', 'detroit': 'DET',
-          'milwaukee': 'MIL', 'miami': 'MIA', 'philadelphia': 'PHI',
-          'brooklyn': 'BKN', 'cleveland': 'CLE', 'washington': 'WAS',
-          'indiana': 'IND', 'chicago': 'CHI', 'charlotte': 'CHA',
-          'houston': 'HOU', 'golden state': 'GS', 'portland': 'POR',
-          'toronto': 'TOR', 'minnesota': 'MIN', 'new york': 'NY',
-          'new orleans': 'NO', 'atlanta': 'ATL', 'boston': 'BOS'
-        };
-        
-        const nflNameToAbbrev: { [key: string]: string } = {
-          'arizona': 'ARI', 'atlanta': 'ATL', 'baltimore': 'BAL', 'buffalo': 'BUF',
-          'carolina': 'CAR', 'chicago': 'CHI', 'cincinnati': 'CIN', 'cleveland': 'CLE',
-          'dallas': 'DAL', 'denver': 'DEN', 'detroit': 'DET', 'green bay': 'GB',
-          'houston': 'HOU', 'indianapolis': 'IND', 'jacksonville': 'JAX', 'kansas city': 'KC',
-          'las vegas': 'LV', 'oakland': 'LV', 'raiders': 'LV', 'la rams': 'LAR',
-          'los angeles rams': 'LAR', 'la chargers': 'LAC', 'los angeles chargers': 'LAC',
-          'miami': 'MIA', 'minnesota': 'MIN', 'new england': 'NE', 'new orleans': 'NO',
-          'ny giants': 'NYG', 'new york giants': 'NYG', 'ny jets': 'NYJ', 'new york jets': 'NYJ',
-          'philadelphia': 'PHI', 'pittsburgh': 'PIT', 'san francisco': 'SF', 'seattle': 'SEA',
-          'tampa bay': 'TB', 'tennessee': 'TEN', 'washington': 'WAS'
-        };
-        
-        const nameToAbbrev = sport === 'nfl' ? nflNameToAbbrev : nbaNameToAbbrev;
-        
-        const awayKey = awayName.toLowerCase();
-        const homeKey = homeName.toLowerCase();
-        
-        for (const [name, abbrev] of Object.entries(nameToAbbrev)) {
-          if (awayKey.includes(name)) {
-            awayAbbrev = abbrev;
-          }
-          if (homeKey.includes(name)) {
-            homeAbbrev = abbrev;
-          }
+      if (sport === 'nfl') {
+        const result = this.parseNFLTitle(title);
+        if (result) {
+          awayAbbrev = result.away;
+          homeAbbrev = result.home;
+        }
+      } else {
+        const result = this.parseNBATitle(title);
+        if (result) {
+          awayAbbrev = result.away;
+          homeAbbrev = result.home;
         }
       }
+    }
+    
+    // Debug logging if extraction failed
+    if (!awayAbbrev || !homeAbbrev) {
+      console.log(`    ⚠️  Failed to extract teams from: "${title}" (Ticker: ${ticker}, Event: ${eventTicker})`);
     }
     
     if (!awayAbbrev || !homeAbbrev) {
@@ -307,6 +351,104 @@ export class KalshiClient {
       scheduledTime: raw.open_time || raw.close_time || new Date().toISOString(),
       status: raw.status,
     };
+  }
+
+  /**
+   * Parse NBA title to extract team abbreviations
+   * Format: "Dallas vs Los Angeles L Winner?" or "Dallas @ Los Angeles L"
+   */
+  private parseNBATitle(title: string): { away: string; home: string } | null {
+    // Match pattern: "Team1 @ Team2" or "Team1 vs Team2" (NBA uses @ or vs)
+    const titleMatch = title.match(/([A-Za-z\s]+?)\s*(?:@|vs|v\.?)\s*([A-Za-z\s]+?)(?:\s|$|:)/i);
+    if (!titleMatch) return null;
+    
+    const awayName = titleMatch[1]?.trim() || '';
+    const homeName = titleMatch[2]?.trim() || '';
+    
+    const nbaNameToAbbrev: { [key: string]: string } = {
+      'dallas': 'DAL', 'los angeles l': 'LAL', 'los angeles c': 'LAC',
+      'memphis': 'MEM', 'san antonio': 'SA', 'denver': 'DEN',
+      'sacramento': 'SAC', 'utah': 'UTA', 'phoenix': 'PHX',
+      'oklahoma city': 'OKC', 'orlando': 'ORL', 'detroit': 'DET',
+      'milwaukee': 'MIL', 'miami': 'MIA', 'philadelphia': 'PHI',
+      'brooklyn': 'BKN', 'cleveland': 'CLE', 'washington': 'WAS',
+      'indiana': 'IND', 'chicago': 'CHI', 'charlotte': 'CHA',
+      'houston': 'HOU', 'golden state': 'GS', 'portland': 'POR',
+      'toronto': 'TOR', 'minnesota': 'MIN', 'new york': 'NY',
+      'new orleans': 'NO', 'atlanta': 'ATL', 'boston': 'BOS'
+    };
+    
+    const awayKey = awayName.toLowerCase().trim();
+    const homeKey = homeName.toLowerCase().trim();
+    
+    let awayAbbrev: string | null = null;
+    let homeAbbrev: string | null = null;
+    
+    // Try to match team names
+    for (const [name, abbrev] of Object.entries(nbaNameToAbbrev)) {
+      if (awayKey.includes(name) || name.includes(awayKey)) {
+        awayAbbrev = abbrev;
+      }
+      if (homeKey.includes(name) || name.includes(homeKey)) {
+        homeAbbrev = abbrev;
+      }
+    }
+    
+    if (awayAbbrev && homeAbbrev) {
+      return { away: awayAbbrev, home: homeAbbrev };
+    }
+    
+    return null;
+  }
+
+  /**
+   * Parse NFL title to extract team abbreviations
+   * Format: "Philadelphia at Los Angeles C Winner?" or "Houston at Kansas City"
+   */
+  private parseNFLTitle(title: string): { away: string; home: string } | null {
+    // Match pattern: "Team1 at Team2" (NFL uses "at")
+    const titleMatch = title.match(/([A-Za-z\s]+?)\s+at\s+([A-Za-z\s]+?)(?:\s|$|:)/i);
+    if (!titleMatch) return null;
+    
+    const awayName = titleMatch[1]?.trim() || '';
+    const homeName = titleMatch[2]?.trim() || '';
+    
+    const nflNameToAbbrev: { [key: string]: string } = {
+      'arizona': 'ARI', 'atlanta': 'ATL', 'baltimore': 'BAL', 'buffalo': 'BUF',
+      'carolina': 'CAR', 'chicago': 'CHI', 'cincinnati': 'CIN', 'cleveland': 'CLE',
+      'dallas': 'DAL', 'denver': 'DEN', 'detroit': 'DET', 'green bay': 'GB',
+      'houston': 'HOU', 'indianapolis': 'IND', 'jacksonville': 'JAX', 'kansas city': 'KC',
+      'las vegas': 'LV', 'oakland': 'LV', 'raiders': 'LV', 'la rams': 'LAR',
+      'los angeles rams': 'LAR', 'los angeles r': 'LAR', 'la chargers': 'LAC',
+      'los angeles chargers': 'LAC', 'los angeles c': 'LAC', 'miami': 'MIA',
+      'minnesota': 'MIN', 'new england': 'NE', 'new orleans': 'NO',
+      'ny giants': 'NYG', 'new york giants': 'NYG', 'ny jets': 'NYJ', 'new york jets': 'NYJ',
+      'philadelphia': 'PHI', 'pittsburgh': 'PIT', 'san francisco': 'SF', 'seattle': 'SEA',
+      'tampa bay': 'TB', 'tennessee': 'TEN', 'washington': 'WAS'
+    };
+    
+    const awayKey = awayName.toLowerCase().trim();
+    const homeKey = homeName.toLowerCase().trim();
+    
+    let awayAbbrev: string | null = null;
+    let homeAbbrev: string | null = null;
+    
+    // Try to match team names (check for partial matches)
+    for (const [name, abbrev] of Object.entries(nflNameToAbbrev)) {
+      // Check if the name is contained in the team name or vice versa
+      if (awayKey.includes(name) || name.includes(awayKey)) {
+        awayAbbrev = abbrev;
+      }
+      if (homeKey.includes(name) || name.includes(homeKey)) {
+        homeAbbrev = abbrev;
+      }
+    }
+    
+    if (awayAbbrev && homeAbbrev) {
+      return { away: awayAbbrev, home: homeAbbrev };
+    }
+    
+    return null;
   }
 
   /**
@@ -336,6 +478,7 @@ export class KalshiClient {
   /**
    * Determine if market is for home or away team
    * Ticker format: KXNBAGAME-25NOV28PHXSAC-SAC (last part indicates the team)
+   * For NFL: KXNFLGAME-25DEC07JAXTEN-JAX (JAX = away) or KXNFLGAME-25DEC07JAXTEN-TEN (TEN = home)
    */
   private determineSide(raw: any, game: Game): 'home' | 'away' {
     const ticker = (raw.ticker || '').toString().toUpperCase();
@@ -343,29 +486,63 @@ export class KalshiClient {
     const awayTeam = game.awayTeam.toUpperCase();
 
     // Extract the team abbreviation from the end of the ticker (after last dash)
-    // Format: KXNBAGAME-25NOV28PHXSAC-SAC
+    // Format: KXNBAGAME-25NOV28PHXSAC-SAC or KXNFLGAME-25DEC07JAXTEN-JAX
     const tickerParts = ticker.split('-');
-    if (tickerParts.length > 0) {
+    if (tickerParts.length >= 3) {
       const lastPart = tickerParts[tickerParts.length - 1];
       
-      // Check if the last part matches home or away team
-      if (lastPart === homeTeam || lastPart.includes(homeTeam)) {
+      // Handle partial abbreviations (e.g., "LA" for "LAR")
+      const partialToFull: { [key: string]: string } = {
+        'LA': 'LAR', // Los Angeles Rams
+      };
+      const normalizedLastPart = partialToFull[lastPart] || lastPart;
+      
+      // Priority 1: Exact match (most reliable)
+      if (lastPart === homeTeam) {
         return 'home';
       }
-      if (lastPart === awayTeam || lastPart.includes(awayTeam)) {
+      if (lastPart === awayTeam) {
+        return 'away';
+      }
+      
+      // Priority 2: Normalized partial match (e.g., "LA" -> "LAR")
+      if (normalizedLastPart === homeTeam) {
+        return 'home';
+      }
+      if (normalizedLastPart === awayTeam) {
+        return 'away';
+      }
+      
+      // Priority 3: Check if last part is a prefix of home/away team (e.g., "LA" matches "LAR")
+      // Only if lastPart is at least 2 characters to avoid false matches
+      if (lastPart.length >= 2 && homeTeam.startsWith(lastPart)) {
+        return 'home';
+      }
+      if (lastPart.length >= 2 && awayTeam.startsWith(lastPart)) {
+        return 'away';
+      }
+      
+      // Priority 4: Check if home/away team is a prefix of last part (less common)
+      if (lastPart.startsWith(homeTeam)) {
+        return 'home';
+      }
+      if (lastPart.startsWith(awayTeam)) {
         return 'away';
       }
     }
 
     // Fallback: check if ticker contains team abbreviations
-    if (ticker.includes(homeTeam)) {
+    // This is less reliable, so we check exact matches in the combined part first
+    const combinedPart = tickerParts.length >= 2 ? tickerParts[tickerParts.length - 2] : '';
+    if (combinedPart && combinedPart.includes(homeTeam) && !combinedPart.includes(awayTeam)) {
       return 'home';
     }
-    if (ticker.includes(awayTeam)) {
+    if (combinedPart && combinedPart.includes(awayTeam) && !combinedPart.includes(homeTeam)) {
       return 'away';
     }
 
-    // Default to home if we can't determine
+    // Default to home if we can't determine (shouldn't happen with valid data)
+    console.log(`    ⚠️  Could not determine side for ticker: ${ticker}, homeTeam: ${homeTeam}, awayTeam: ${awayTeam}`);
     return 'home';
   }
 }

@@ -75,7 +75,7 @@ export const config: Config = {
     },
     nfl: {
       espnPath: 'football/nfl/scoreboard',
-      kalshiSeries: 'kxnflgame', // Lowercase as shown in Kalshi URLs
+      kalshiSeries: 'KXNFLGAME', // Uppercase works with API
     },
   },
   twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {
