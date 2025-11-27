@@ -40,7 +40,13 @@ export class KalshiClient {
       const currentTime = Math.floor(Date.now() / 1000);
       
       // Try both lowercase and uppercase versions of the series ticker
-      const seriesTickersToTry = [seriesTicker, seriesTicker.toUpperCase(), seriesTicker.toLowerCase()];
+      // For college sports, try lowercase first as they might use lowercase
+      // For NHL, also try lowercase as it might be case-sensitive
+      const seriesTickersToTry = sport === 'ncaaf' || sport === 'ncaab' 
+        ? [seriesTicker.toLowerCase(), seriesTicker, seriesTicker.toUpperCase()]
+        : sport === 'nhl'
+        ? [seriesTicker.toLowerCase(), seriesTicker, seriesTicker.toUpperCase()]
+        : [seriesTicker, seriesTicker.toUpperCase(), seriesTicker.toLowerCase()];
       const uniqueSeriesTickers = Array.from(new Set(seriesTickersToTry));
       
       let allMarkets: any[] = [];
@@ -61,10 +67,52 @@ export class KalshiClient {
           const markets = marketsResponse.data?.markets || [];
           if (markets.length > 0) {
             allMarkets = markets;
+            console.log(`  Found ${markets.length} total markets for ${tickerToTry}`);
             break; // Found markets, stop trying other variations
+          } else {
+            // Log when we try a ticker but get 0 results (for debugging college sports)
+            if (sport === 'ncaaf' || sport === 'ncaab') {
+              console.log(`  [DEBUG] Tried ${tickerToTry}: 0 markets found`);
+            }
           }
         } catch (error: any) {
-          // Silently try next variation
+          // Log errors for college sports to help debug
+          if (sport === 'ncaaf' || sport === 'ncaab') {
+            console.log(`  [DEBUG] Error trying ${tickerToTry}: ${error.message}`);
+          }
+        }
+      }
+      
+      // If no markets found with 'open' status, try without status filter for college sports
+      if (allMarkets.length === 0 && (sport === 'ncaaf' || sport === 'ncaab')) {
+        console.log(`  [DEBUG] No open markets found, trying without status filter...`);
+        for (const tickerToTry of uniqueSeriesTickers) {
+          try {
+            const marketsResponse = await this.marketsApi.getMarkets(
+              1000, // limit
+              undefined, // cursor
+              undefined, // eventTicker
+              tickerToTry, // seriesTicker
+              undefined, // maxCloseTs
+              undefined, // minCloseTs - try without time filter too
+              undefined, // status - try without status filter
+              undefined // tickers
+            );
+
+            const markets = marketsResponse.data?.markets || [];
+            if (markets.length > 0) {
+              // Filter to only open markets manually
+              allMarkets = markets.filter((m: any) => m.status === 'open');
+              console.log(`  [DEBUG] Found ${markets.length} total markets (${allMarkets.length} open) for ${tickerToTry} without status/time filters`);
+              if (allMarkets.length > 0) {
+                break;
+              }
+            } else {
+              console.log(`  [DEBUG] Tried ${tickerToTry} without filters: 0 markets found`);
+            }
+          } catch (error: any) {
+            console.log(`  [DEBUG] Error trying ${tickerToTry} without filters: ${error.message}`);
+          }
         }
       }
       
@@ -74,15 +122,24 @@ export class KalshiClient {
         const titleUpper = title.toUpperCase();
         const eventTicker = (m.event_ticker || '').toString().toUpperCase();
         
-        // Look for game indicators first: @ symbol, team names, vs, "Winner?"
+        // For college sports, be more lenient with filtering
+        // College team names can be longer and formats vary more
+        const isCollegeSport = sport === 'ncaaf' || sport === 'ncaab';
+        
+        // Look for game indicators first: @ symbol, team names, vs, "Winner?", "at"
         const hasGameFormat = title.includes('@') || 
                              titleUpper.includes(' VS ') || 
                              titleUpper.includes(' V ') ||
                              titleUpper.includes('WINNER?') ||
+                             titleUpper.includes(' AT ') || // Common in college sports
                              eventTicker.includes('@');
         
-        // If it has game format, it's likely a game market (even if it has "?")
-        if (hasGameFormat) {
+        // For college sports, also check if event ticker has team-like patterns
+        // College tickers often have longer abbreviations (e.g., KXNCAAFGAME-25NOV30ALABAMA-AUB or KXNCAAMBGAME-25NOV27SBONECU-SBON)
+        const hasCollegeGamePattern = isCollegeSport && eventTicker && eventTicker.length > 15;
+        
+        // If it has game format or college pattern, it's likely a game market
+        if (hasGameFormat || hasCollegeGamePattern) {
           // Still exclude obvious propositions that might have game format
           const isProposition = titleUpper.startsWith('WILL ') ||
                                titleUpper.startsWith('WHO ') ||
@@ -98,11 +155,25 @@ export class KalshiClient {
           return !isProposition;
         }
         
+        // For college sports, be more lenient - if it's from the right series, include it
+        // (we'll let parsing determine if it's valid)
+        if (isCollegeSport && eventTicker) {
+          const seriesPrefix = sport === 'ncaaf' ? 'KXNCAAFGAME' : 'KXNCAAMBGAME';
+          if (eventTicker.toUpperCase().startsWith(seriesPrefix)) {
+            // Likely a game market, include it and let parsing decide
+            return true;
+          }
+        }
+        
         // No game format found, exclude it
         return false;
       });
       
+      console.log(`  Filtered to ${gameMarkets.length} game markets (from ${allMarkets.length} total)`);
+      
       const parsed = this.parseMarkets(gameMarkets, sport);
+      
+      console.log(`  Successfully parsed ${parsed.length} ${sport.toUpperCase()} markets`);
       
       return parsed;
     } catch (error: any) {
@@ -120,23 +191,37 @@ export class KalshiClient {
    */
   private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Market[] {
     const markets: Market[] = [];
+    let skippedGameInfo = 0;
+    let skippedPrice = 0;
+    let skippedSide = 0;
+    let errors = 0;
 
     for (const raw of rawMarkets) {
       try {
         // Extract game information from market title/ticker
         const gameInfo = this.extractGameInfo(raw, sport);
         if (!gameInfo) {
+          skippedGameInfo++;
+          if (sport === 'nhl' && skippedGameInfo <= 3) {
+            // Log first few failures for debugging
+            console.log(`  [DEBUG] Failed to extract game info for NHL market: ${raw.ticker || raw.event_ticker || 'N/A'} - Title: ${raw.title || 'N/A'}`);
+          }
           continue;
         }
 
         // Get current price (best bid or last price)
         const price = this.extractPrice(raw);
         if (price === null) {
+          skippedPrice++;
           continue;
         }
 
         // Determine side (home/away) from market
         const side = this.determineSide(raw, gameInfo);
+        if (!side) {
+          skippedSide++;
+          continue;
+        }
 
         const impliedProb = impliedProbabilityFromKalshiPrice(price);
         markets.push({
@@ -150,8 +235,15 @@ export class KalshiClient {
           impliedProbability: impliedProb,
         });
       } catch (error: any) {
-        // Silently skip invalid markets
+        errors++;
+        if (sport === 'nhl' && errors <= 3) {
+          console.log(`  [DEBUG] Error parsing market ${raw.ticker || 'N/A'}: ${error.message}`);
+        }
       }
+    }
+
+    if (sport === 'nhl' && markets.length === 0 && rawMarkets.length > 0) {
+      console.log(`  [DEBUG] Parsing stats: ${skippedGameInfo} failed gameInfo, ${skippedPrice} failed price, ${skippedSide} failed side, ${errors} errors`);
     }
 
     return markets;
@@ -195,7 +287,7 @@ export class KalshiClient {
       'MIN': 'MIN', 'MTL': 'MTL', 'NSH': 'NSH', 'NJ': 'NJD', 'NJD': 'NJD',
       'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT',
       'SJ': 'SJS', 'SJS': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'TB': 'TBL',
-      'TBL': 'TBL', 'TOR': 'TOR', 'VAN': 'VAN', 'VGK': 'VGK', 'WAS': 'WSH',
+      'TBL': 'TBL', 'TOR': 'TOR', 'UTA': 'UTA', 'VAN': 'VAN', 'VGK': 'VGK', 'WAS': 'WSH',
       'WSH': 'WSH', 'WPG': 'WPG'
     };
     
@@ -207,8 +299,8 @@ export class KalshiClient {
                          nbaTeamAbbrevMap;
     const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 
                         sport === 'nhl' ? 'KXNHLGAME' : 
-                        sport === 'ncaab' ? 'KXNCAABGAME' :
-                        sport === 'ncaaf' ? 'KXNCAAGAME' :
+                        sport === 'ncaab' ? 'KXNCAAMBGAME' :
+                        sport === 'ncaaf' ? 'KXNCAAFGAME' :
                         'KXNBAGAME';
     
     // Try to extract from event ticker first (most reliable)
@@ -227,7 +319,7 @@ export class KalshiClient {
           [3, 3], [3, 4], [4, 3], [3, 2], [2, 3], [4, 4], [2, 4], [4, 2]
         ];
         
-        // Handle partial abbreviations mapping (e.g., "LA" -> "LAR" for Rams)
+        // Handle partial abbreviations mapping (e.g., "LA" -> "LAR" for Rams, "LAK" for Kings)
         const partialToFull: { [key: string]: string } = sport === 'nfl' ? {
           'LA': 'LAR', // Los Angeles Rams
         } : sport === 'nhl' ? {
@@ -243,7 +335,7 @@ export class KalshiClient {
             const abbrev2 = combinedAbbrev.substring(len1, len1 + len2);
             
             // Check if both are valid team abbreviations
-            // Handle partial abbreviations (e.g., "LA" for "LAR")
+            // Handle partial abbreviations (e.g., "LA" for "LAR" or "LAK")
             let abbrev1Full = teamAbbrevMap[abbrev1];
             let abbrev2Full = teamAbbrevMap[abbrev2];
             
@@ -267,11 +359,45 @@ export class KalshiClient {
               }
             }
             
+            // For NHL, also check reverse (abbrev might be suffix of key)
+            if (sport === 'nhl') {
+              if (!abbrev1Full) {
+                for (const [key, value] of Object.entries(teamAbbrevMap)) {
+                  if (key.endsWith(abbrev1) || abbrev1.endsWith(key)) {
+                    abbrev1Full = value;
+                    break;
+                  }
+                }
+              }
+              if (!abbrev2Full) {
+                for (const [key, value] of Object.entries(teamAbbrevMap)) {
+                  if (key.endsWith(abbrev2) || abbrev2.endsWith(key)) {
+                    abbrev2Full = value;
+                    break;
+                  }
+                }
+              }
+            }
+            
             if (abbrev1Full && abbrev2Full) {
               awayAbbrev = abbrev1Full;
               homeAbbrev = abbrev2Full;
               break;
             }
+          }
+        }
+        
+        // Special cases for NHL
+        if (!awayAbbrev && sport === 'nhl') {
+          // Handle SJVGK -> SJ (SJS) + VGK
+          if (combinedAbbrev === 'SJVGK') {
+            awayAbbrev = 'SJS';
+            homeAbbrev = 'VGK';
+          }
+          // Handle VANLA -> VAN + LA (LAK)
+          else if (combinedAbbrev === 'VANLA') {
+            awayAbbrev = 'VAN';
+            homeAbbrev = 'LAK';
           }
         }
         
@@ -290,12 +416,17 @@ export class KalshiClient {
         const combined = tickerMatch[1];
         const sideAbbrev = tickerMatch[2];
         
-        // Handle partial abbreviations (e.g., "LA" should map to "LAR" for Rams)
-        const partialAbbrevMap: { [key: string]: string } = {
-          'LA': 'LAR', // Los Angeles Rams
-          'LAC': 'LAC', // Los Angeles Chargers (full)
-        };
-        const fullSideAbbrev = partialAbbrevMap[sideAbbrev] || sideAbbrev;
+      // Handle partial abbreviations (e.g., "LA" should map to "LAR" for Rams, "LAK" for Kings)
+      const partialAbbrevMap: { [key: string]: string } = sport === 'nhl' ? {
+        'LA': 'LAK', // Los Angeles Kings
+        'SJ': 'SJS', // San Jose Sharks
+        'NJ': 'NJD', // New Jersey Devils
+        'TB': 'TBL', // Tampa Bay Lightning
+      } : sport === 'nfl' ? {
+        'LA': 'LAR', // Los Angeles Rams
+        'LAC': 'LAC', // Los Angeles Chargers (full)
+      } : {};
+      const fullSideAbbrev = partialAbbrevMap[sideAbbrev] || sideAbbrev;
         
         // Try to split combined to find the other team
         for (const [len1, len2] of [[3, 3], [3, 4], [4, 3], [3, 2], [2, 3], [2, 4], [4, 2]]) {
@@ -441,11 +572,11 @@ export class KalshiClient {
 
   /**
    * Parse NHL title to extract team abbreviations
-   * Format: "New York Rangers at Boston Bruins Winner?" or "Toronto at Montreal"
+   * Format: "New York Rangers at Boston Bruins Winner?" or "Toronto at Montreal" or "San Jose vs Vegas Winner?"
    */
   private parseNHLTitle(title: string): { away: string; home: string } | null {
-    // Match pattern: "Team1 at Team2" (NHL uses "at")
-    const titleMatch = title.match(/([A-Za-z\s]+?)\s+at\s+([A-Za-z\s]+?)(?:\s|$|:)/i);
+    // Match pattern: "Team1 at Team2" or "Team1 vs Team2" (NHL uses both "at" and "vs")
+    const titleMatch = title.match(/([A-Za-z\s]+?)\s+(?:at|vs)\s+([A-Za-z\s]+?)(?:\s|$|:)/i);
     if (!titleMatch) return null;
     
     const awayName = titleMatch[1]?.trim() || '';
@@ -460,7 +591,7 @@ export class KalshiClient {
       'new york islanders': 'NYI', 'ny rangers': 'NYR', 'new york rangers': 'NYR',
       'ottawa': 'OTT', 'philadelphia': 'PHI', 'pittsburgh': 'PIT', 'san jose': 'SJS',
       'seattle': 'SEA', 'st louis': 'STL', 'tampa bay': 'TBL', 'toronto': 'TOR',
-      'vancouver': 'VAN', 'vegas': 'VGK', 'washington': 'WSH', 'winnipeg': 'WPG'
+      'utah': 'UTA', 'utah mammoth': 'UTA', 'mammoth': 'UTA', 'vancouver': 'VAN', 'vegas': 'VGK', 'washington': 'WSH', 'winnipeg': 'WPG'
     };
     
     const awayKey = awayName.toLowerCase().trim();
@@ -576,11 +707,21 @@ export class KalshiClient {
     if (tickerParts.length >= 3) {
       const lastPart = tickerParts[tickerParts.length - 1];
       
-      // Handle partial abbreviations (e.g., "LA" for "LAR")
-      const partialToFull: { [key: string]: string } = {
+      // Handle partial abbreviations (e.g., "LA" for "LAR" in NFL, "LAK" in NHL)
+      // Note: We need to know the sport to map correctly, but determineSide doesn't have sport param
+      // For now, try both mappings and see which matches
+      const partialToFullNFL: { [key: string]: string } = {
         'LA': 'LAR', // Los Angeles Rams
       };
-      const normalizedLastPart = partialToFull[lastPart] || lastPart;
+      const partialToFullNHL: { [key: string]: string } = {
+        'LA': 'LAK', // Los Angeles Kings
+        'SJ': 'SJS', // San Jose Sharks
+        'NJ': 'NJD', // New Jersey Devils
+        'TB': 'TBL', // Tampa Bay Lightning
+      };
+      
+      // Try NHL mapping first (more specific), then NFL, then use original
+      let normalizedLastPart = partialToFullNHL[lastPart] || partialToFullNFL[lastPart] || lastPart;
       
       // Priority 1: Exact match (most reliable)
       if (lastPart === homeTeam) {

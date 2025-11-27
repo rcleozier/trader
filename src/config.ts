@@ -113,11 +113,11 @@ export const config: Config = {
     },
     ncaab: {
       espnPath: 'basketball/mens-college-basketball/scoreboard',
-      kalshiSeries: 'KXNCAABGAME',
+      kalshiSeries: 'KXNCAAMBGAME',
     },
     ncaaf: {
       espnPath: 'football/college-football/scoreboard',
-      kalshiSeries: 'KXNCAAGAME',
+      kalshiSeries: 'KXNCAAFGAME',
     },
   },
   twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {
