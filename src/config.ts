@@ -23,6 +23,10 @@ interface Config {
       espnPath: string;
       kalshiSeries: string;
     };
+    nhl: {
+      espnPath: string;
+      kalshiSeries: string;
+    };
   };
   twilio?: {
     accountSid: string;
@@ -76,6 +80,10 @@ export const config: Config = {
     nfl: {
       espnPath: 'football/nfl/scoreboard',
       kalshiSeries: 'KXNFLGAME', // Uppercase works with API
+    },
+    nhl: {
+      espnPath: 'hockey/nhl/scoreboard',
+      kalshiSeries: 'KXNHLGAME',
     },
   },
   twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {

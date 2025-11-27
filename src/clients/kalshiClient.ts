@@ -1,4 +1,4 @@
-import { Configuration, MarketsApi, EventsApi, SeriesApi } from 'kalshi-typescript';
+import { Configuration, MarketsApi, EventsApi, SeriesApi, PortfolioApi } from 'kalshi-typescript';
 import axios from 'axios';
 import { config } from '../config';
 import { Market, Game } from '../types/markets';
@@ -8,6 +8,7 @@ export class KalshiClient {
   private marketsApi: MarketsApi;
   private eventsApi: EventsApi;
   private seriesApi: SeriesApi;
+  private portfolioApi: PortfolioApi;
   private kalshiConfig: Configuration;
   private axiosClient: any;
 
@@ -22,6 +23,7 @@ export class KalshiClient {
     this.marketsApi = new MarketsApi(this.kalshiConfig);
     this.eventsApi = new EventsApi(this.kalshiConfig);
     this.seriesApi = new SeriesApi(this.kalshiConfig);
+    this.portfolioApi = new PortfolioApi(this.kalshiConfig);
     
     // Create axios client for direct API calls (like live-data)
     this.axiosClient = axios.create({
@@ -33,7 +35,7 @@ export class KalshiClient {
   /**
    * Fetch markets from Kalshi for a specific series
    */
-  async fetchMarkets(seriesTicker: string, sport: 'nba' | 'nfl' = 'nba'): Promise<Market[]> {
+  async fetchMarkets(seriesTicker: string, sport: 'nba' | 'nfl' | 'nhl' = 'nba'): Promise<Market[]> {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
       
@@ -116,7 +118,7 @@ export class KalshiClient {
   /**
    * Parse raw Kalshi market data into our Market format
    */
-  private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' = 'nba'): Market[] {
+  private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' | 'nhl' = 'nba'): Market[] {
     const markets: Market[] = [];
 
     for (const raw of rawMarkets) {
@@ -160,7 +162,7 @@ export class KalshiClient {
    * Kalshi ticker format: KXNBAGAME-25NOV28DALLAL-LAL
    * Event ticker format: KXNBAGAME-25NOV28DALLAL (contains both team abbreviations)
    */
-  private extractGameInfo(raw: any, sport: 'nba' | 'nfl' = 'nba'): Game | null {
+  private extractGameInfo(raw: any, sport: 'nba' | 'nfl' | 'nhl' = 'nba'): Game | null {
     const title = (raw.title || raw.name || '').toString();
     const ticker = (raw.ticker || '').toString();
     const eventTicker = (raw.event_ticker || '').toString();
@@ -186,8 +188,19 @@ export class KalshiClient {
       'TEN': 'TEN', 'WAS': 'WAS', 'WSH': 'WAS'
     };
     
-    const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : nbaTeamAbbrevMap;
-    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 'KXNBAGAME'; // Both use uppercase in API
+    const nhlTeamAbbrevMap: { [key: string]: string } = {
+      'ANA': 'ANA', 'ARI': 'ARI', 'BOS': 'BOS', 'BUF': 'BUF', 'CGY': 'CGY',
+      'CAR': 'CAR', 'CHI': 'CHI', 'COL': 'COL', 'CBJ': 'CBJ', 'DAL': 'DAL',
+      'DET': 'DET', 'EDM': 'EDM', 'FLA': 'FLA', 'LA': 'LAK', 'LAK': 'LAK',
+      'MIN': 'MIN', 'MTL': 'MTL', 'NSH': 'NSH', 'NJ': 'NJD', 'NJD': 'NJD',
+      'NYI': 'NYI', 'NYR': 'NYR', 'OTT': 'OTT', 'PHI': 'PHI', 'PIT': 'PIT',
+      'SJ': 'SJS', 'SJS': 'SJS', 'SEA': 'SEA', 'STL': 'STL', 'TB': 'TBL',
+      'TBL': 'TBL', 'TOR': 'TOR', 'VAN': 'VAN', 'VGK': 'VGK', 'WAS': 'WSH',
+      'WSH': 'WSH', 'WPG': 'WPG'
+    };
+    
+    const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : sport === 'nhl' ? nhlTeamAbbrevMap : nbaTeamAbbrevMap;
+    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : sport === 'nhl' ? 'KXNHLGAME' : 'KXNBAGAME';
     
     // Try to extract from event ticker first (most reliable)
     // Format: KXNBAGAME-25NOV28DALLAL or kxnflgame-25DEC01NYGNE
@@ -208,6 +221,11 @@ export class KalshiClient {
         // Handle partial abbreviations mapping (e.g., "LA" -> "LAR" for Rams)
         const partialToFull: { [key: string]: string } = sport === 'nfl' ? {
           'LA': 'LAR', // Los Angeles Rams
+        } : sport === 'nhl' ? {
+          'LA': 'LAK', // Los Angeles Kings
+          'SJ': 'SJS', // San Jose Sharks
+          'NJ': 'NJD', // New Jersey Devils
+          'TB': 'TBL', // Tampa Bay Lightning
         } : {};
         
         for (const [len1, len2] of possibleSplits) {
@@ -305,6 +323,12 @@ export class KalshiClient {
           awayAbbrev = result.away;
           homeAbbrev = result.home;
         }
+      } else if (sport === 'nhl') {
+        const result = this.parseNHLTitle(title);
+        if (result) {
+          awayAbbrev = result.away;
+          homeAbbrev = result.home;
+        }
       } else {
         const result = this.parseNBATitle(title);
         if (result) {
@@ -360,6 +384,53 @@ export class KalshiClient {
     
     // Try to match team names
     for (const [name, abbrev] of Object.entries(nbaNameToAbbrev)) {
+      if (awayKey.includes(name) || name.includes(awayKey)) {
+        awayAbbrev = abbrev;
+      }
+      if (homeKey.includes(name) || name.includes(homeKey)) {
+        homeAbbrev = abbrev;
+      }
+    }
+    
+    if (awayAbbrev && homeAbbrev) {
+      return { away: awayAbbrev, home: homeAbbrev };
+    }
+    
+    return null;
+  }
+
+  /**
+   * Parse NHL title to extract team abbreviations
+   * Format: "New York Rangers at Boston Bruins Winner?" or "Toronto at Montreal"
+   */
+  private parseNHLTitle(title: string): { away: string; home: string } | null {
+    // Match pattern: "Team1 at Team2" (NHL uses "at")
+    const titleMatch = title.match(/([A-Za-z\s]+?)\s+at\s+([A-Za-z\s]+?)(?:\s|$|:)/i);
+    if (!titleMatch) return null;
+    
+    const awayName = titleMatch[1]?.trim() || '';
+    const homeName = titleMatch[2]?.trim() || '';
+    
+    const nhlNameToAbbrev: { [key: string]: string } = {
+      'anaheim': 'ANA', 'arizona': 'ARI', 'boston': 'BOS', 'buffalo': 'BUF',
+      'calgary': 'CGY', 'carolina': 'CAR', 'chicago': 'CHI', 'colorado': 'COL',
+      'columbus': 'CBJ', 'dallas': 'DAL', 'detroit': 'DET', 'edmonton': 'EDM',
+      'florida': 'FLA', 'los angeles': 'LAK', 'la kings': 'LAK', 'minnesota': 'MIN',
+      'montreal': 'MTL', 'nashville': 'NSH', 'new jersey': 'NJD', 'ny islanders': 'NYI',
+      'new york islanders': 'NYI', 'ny rangers': 'NYR', 'new york rangers': 'NYR',
+      'ottawa': 'OTT', 'philadelphia': 'PHI', 'pittsburgh': 'PIT', 'san jose': 'SJS',
+      'seattle': 'SEA', 'st louis': 'STL', 'tampa bay': 'TBL', 'toronto': 'TOR',
+      'vancouver': 'VAN', 'vegas': 'VGK', 'washington': 'WSH', 'winnipeg': 'WPG'
+    };
+    
+    const awayKey = awayName.toLowerCase().trim();
+    const homeKey = homeName.toLowerCase().trim();
+    
+    let awayAbbrev: string | null = null;
+    let homeAbbrev: string | null = null;
+    
+    // Try to match team names (check for partial matches)
+    for (const [name, abbrev] of Object.entries(nhlNameToAbbrev)) {
       if (awayKey.includes(name) || name.includes(awayKey)) {
         awayAbbrev = abbrev;
       }
@@ -517,5 +588,149 @@ export class KalshiClient {
 
     // Default to home if we can't determine (shouldn't happen with valid data)
     return 'home';
+  }
+
+  /**
+   * Get account balance
+   */
+  async getBalance(): Promise<number | null> {
+    try {
+      const response = await this.portfolioApi.getBalance();
+      // Balance is in cents, convert to dollars
+      return response.data?.balance ? response.data.balance / 100 : null;
+    } catch (error: any) {
+      return null;
+    }
+  }
+
+  /**
+   * Get active positions with market data for cost calculation
+   */
+  async getActivePositions(): Promise<any[]> {
+    try {
+      const response = await this.portfolioApi.getPositions(
+        undefined, // ticker
+        undefined, // eventTicker
+        undefined, // countDown
+        undefined, // countUp
+        1000, // limit
+        undefined // cursor
+      );
+      const positions = response.data?.market_positions || [];
+      // Filter for positions with non-zero position count
+      const activePositions = positions.filter((p: any) => p.position && p.position !== 0);
+      
+      // Try to get current market prices to calculate estimated value
+      const positionsWithValue = await Promise.all(
+        activePositions.map(async (pos: any) => {
+          if (pos.total_cost && pos.total_cost > 0) {
+            // If total_cost is already available, use it
+            return pos;
+          }
+          
+          // Try to fetch current market price to estimate value
+          if (pos.ticker) {
+            try {
+              const marketResponse = await this.marketsApi.getMarkets(
+                1, // limit
+                undefined, // cursor
+                undefined, // eventTicker
+                undefined, // seriesTicker
+                undefined, // maxCloseTs
+                undefined, // minCloseTs
+                'open', // status
+                pos.ticker // tickers - specific ticker
+              );
+              
+              const markets = marketResponse.data?.markets || [];
+              if (markets.length > 0) {
+                const market = markets[0];
+                const isYesPosition = pos.market_result === 'yes';
+                
+                // Get the correct price based on position side
+                let currentPrice: number | null = null;
+                if (isYesPosition) {
+                  // For YES positions, use YES price
+                  currentPrice = market.last_price !== undefined && market.last_price !== null
+                    ? market.last_price
+                    : market.yes_bid !== undefined && market.yes_bid !== null
+                    ? market.yes_bid
+                    : market.yes_ask !== undefined && market.yes_ask !== null
+                    ? market.yes_ask
+                    : null;
+                } else {
+                  // For NO positions, use NO price
+                  // NO price is typically (100 - YES price), but we can also get it directly
+                  const yesPrice = market.last_price !== undefined && market.last_price !== null
+                    ? market.last_price
+                    : market.yes_bid !== undefined && market.yes_bid !== null
+                    ? market.yes_bid
+                    : market.yes_ask !== undefined && market.yes_ask !== null
+                    ? market.yes_ask
+                    : null;
+                  
+                  if (yesPrice !== null) {
+                    // NO price = 100 - YES price
+                    currentPrice = 100 - yesPrice;
+                  } else if (market.no_bid !== undefined && market.no_bid !== null) {
+                    currentPrice = market.no_bid;
+                  } else if (market.no_ask !== undefined && market.no_ask !== null) {
+                    currentPrice = market.no_ask;
+                  }
+                }
+                
+                if (currentPrice !== null) {
+                  // Calculate estimated value: position * price (in cents)
+                  // Position is in contracts, price is 0-100, so value = position * price (in cents)
+                  const estimatedValue = (pos.position || 0) * currentPrice; // in cents
+                  pos.estimated_value = estimatedValue;
+                  pos.current_price = currentPrice;
+                }
+              }
+            } catch (error: any) {
+              // If we can't fetch market data, just continue without estimated value
+            }
+          }
+          
+          return pos;
+        })
+      );
+      
+      return positionsWithValue;
+    } catch (error: any) {
+      return [];
+    }
+  }
+
+  /**
+   * Get active orders (resting/pending orders)
+   */
+  async getActiveOrders(): Promise<any[]> {
+    try {
+      const response = await this.portfolioApi.getOrders(
+        undefined, // ticker
+        undefined, // eventTicker
+        undefined, // minTs
+        undefined, // maxTs
+        'resting', // status - only get resting/pending orders
+        1000, // limit
+        undefined // cursor
+      );
+      const orders = response.data?.orders || [];
+      // Also get pending orders
+      const pendingResponse = await this.portfolioApi.getOrders(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'pending',
+        1000,
+        undefined
+      );
+      const pendingOrders = pendingResponse.data?.orders || [];
+      return [...orders, ...pendingOrders];
+    } catch (error: any) {
+      return [];
+    }
   }
 }
