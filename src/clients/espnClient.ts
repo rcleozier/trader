@@ -140,9 +140,12 @@ export class ESPNClient {
       };
     }
     
-    // Fall back to competition.moneyline object
+    // Try competition.moneyline object (most common for NCAAF)
+    // Structure: competition.moneyline.home.close.odds and competition.moneyline.away.close.odds
     if (competition.moneyline) {
       const ml = competition.moneyline;
+      
+      // Try close odds first, then open odds
       const homeOddsStr = ml.home?.close?.odds || ml.home?.open?.odds;
       const awayOddsStr = ml.away?.close?.odds || ml.away?.open?.odds;
       
@@ -160,13 +163,33 @@ export class ESPNClient {
     const oddsArray = competition.odds || [];
     if (Array.isArray(oddsArray) && oddsArray.length > 0) {
       // Look for moneyline in the odds array
-      // The structure has awayTeamOdds and homeTeamOdds with moneyLine field
+      // NCAAF structure: odds[].moneyline.home.close.odds and odds[].moneyline.away.close.odds
       for (const oddsObj of oddsArray) {
+        // Check if moneyline object exists in the odds object
+        if (oddsObj.moneyline) {
+          const ml = oddsObj.moneyline;
+          const homeOddsStr = ml.home?.close?.odds || ml.home?.open?.odds;
+          const awayOddsStr = ml.away?.close?.odds || ml.away?.open?.odds;
+          
+          if (homeOddsStr && awayOddsStr) {
+            const homeOdds = this.parseOddsString(homeOddsStr);
+            const awayOdds = this.parseOddsString(awayOddsStr);
+            
+            if (homeOdds !== null && awayOdds !== null) {
+              return { homeOdds, awayOdds };
+            }
+          }
+        }
+        
+        // Also check for moneyLine in awayTeamOdds/homeTeamOdds (for other sports)
         if (oddsObj.awayTeamOdds?.moneyLine !== undefined && oddsObj.homeTeamOdds?.moneyLine !== undefined) {
-          return {
-            homeOdds: oddsObj.homeTeamOdds.moneyLine,
-            awayOdds: oddsObj.awayTeamOdds.moneyLine,
-          };
+          // Only use if both are not null
+          if (oddsObj.awayTeamOdds.moneyLine !== null && oddsObj.homeTeamOdds.moneyLine !== null) {
+            return {
+              homeOdds: oddsObj.homeTeamOdds.moneyLine,
+              awayOdds: oddsObj.awayTeamOdds.moneyLine,
+            };
+          }
         }
       }
     }

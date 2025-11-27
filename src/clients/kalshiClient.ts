@@ -5,7 +5,7 @@ import { Market, Game } from '../types/markets';
 import { impliedProbabilityFromKalshiPrice } from '../lib/odds';
 
 export class KalshiClient {
-  private marketsApi: MarketsApi;
+  public marketsApi: MarketsApi; // Made public for trading service access
   private eventsApi: EventsApi;
   private seriesApi: SeriesApi;
   public portfolioApi: PortfolioApi; // Made public for trading service access
@@ -773,4 +773,5 @@ export class KalshiClient {
       return [];
     }
   }
+
 }

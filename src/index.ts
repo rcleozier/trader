@@ -3,9 +3,6 @@ import { KalshiClient } from './clients/kalshiClient';
 import { ESPNClient } from './clients/espnClient';
 import { MispricingService } from './services/mispricingService';
 import { TradingService } from './services/tradingService';
-// PDF and Email services disabled - code kept for future use
-// import { PDFService, ReportData } from './services/pdfService';
-// import { EmailService } from './services/emailService';
 
 // Minimal type for games data (PDF generation disabled)
 type GameSideData = {
@@ -616,8 +613,8 @@ async function runMispricingCheck(): Promise<void> {
   // Initialize trading service if configured
   let tradingService: TradingService | undefined;
   if (config.trading) {
-    // Use the same KalshiClient instance to access PortfolioApi and refresh orders
-    tradingService = new TradingService(kalshiClient.portfolioApi, config.trading, kalshiClient);
+    // Use the same KalshiClient instance to access PortfolioApi, MarketsApi and refresh orders
+    tradingService = new TradingService(kalshiClient.portfolioApi, kalshiClient.marketsApi, config.trading, kalshiClient);
     
     if (config.trading.liveTrades) {
       console.log(`\n${colors.bright}${colors.yellow}⚠️  LIVE TRADING ENABLED${colors.reset}`);
@@ -632,26 +629,6 @@ async function runMispricingCheck(): Promise<void> {
   await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance);
   await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance);
   await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance);
-  
-  // PDF generation disabled - code kept for future use
-  // To re-enable: uncomment below and configure email in .env
-  /*
-  if (config.sendgrid || config.email) {
-    try {
-      const pdfService = new PDFService();
-      const emailService = new EmailService();
-      
-      console.log(`\n${colors.bright}${colors.cyan}Generating PDF report...${colors.reset}`);
-      const pdfPath = await pdfService.generatePDF(reportData);
-      console.log(`${colors.green}✅ PDF generated: ${pdfPath}${colors.reset}`);
-      
-      console.log(`${colors.bright}${colors.cyan}Sending email report...${colors.reset}`);
-      await emailService.sendPDFReport(pdfPath);
-    } catch (error: any) {
-      console.error(`${colors.red}❌ Failed to generate/send PDF report: ${error.message}${colors.reset}`);
-    }
-  }
-  */
 }
 
 // Main execution

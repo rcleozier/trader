@@ -1,4 +1,4 @@
-import { PortfolioApi } from 'kalshi-typescript';
+import { PortfolioApi, MarketsApi } from 'kalshi-typescript';
 import { config } from '../config';
 import { Mispricing } from '../types/markets';
 import { KalshiClient } from '../clients/kalshiClient';
@@ -19,11 +19,13 @@ export interface TradingConfig {
 
 export class TradingService {
   private portfolioApi: PortfolioApi;
+  private marketsApi: MarketsApi;
   private tradingConfig: TradingConfig;
   private kalshiClient?: KalshiClient;
 
-  constructor(portfolioApi: PortfolioApi, tradingConfig: TradingConfig, kalshiClient?: KalshiClient) {
+  constructor(portfolioApi: PortfolioApi, marketsApi: MarketsApi, tradingConfig: TradingConfig, kalshiClient?: KalshiClient) {
     this.portfolioApi = portfolioApi;
+    this.marketsApi = marketsApi;
     this.tradingConfig = tradingConfig;
     this.kalshiClient = kalshiClient;
   }
@@ -107,10 +109,61 @@ export class TradingService {
     // If Kalshi overvalues (Kalshi prob > ESPN prob), buy NO on Kalshi
     const side = mispricing.isKalshiOvervaluing ? 'no' : 'yes';
     
-    // Get current market price for the side we want to buy
-    // For YES: use yes_price or last_price
-    // For NO: use no_price or (100 - yes_price)
-    const buyPrice = side === 'yes' ? mispricing.kalshiPrice : (100 - mispricing.kalshiPrice);
+    // Fetch current market data to get the ask price (so order executes immediately)
+    let buyPrice: number;
+    try {
+      // Get the current market to fetch ask prices
+      const marketResponse = await this.marketsApi.getMarkets(
+        1, // limit
+        undefined, // cursor
+        undefined, // eventTicker
+        undefined, // seriesTicker
+        undefined, // maxCloseTs
+        undefined, // minCloseTs
+        undefined, // status
+        marketTicker // tickers - get this specific market (single ticker string)
+      );
+      
+      const market = marketResponse.data?.markets?.[0];
+      if (market) {
+        // Use ask price for immediate execution
+        if (side === 'yes') {
+          // For YES, use yes_ask if available, otherwise yes_bid, otherwise last_price
+          buyPrice = market.yes_ask !== undefined && market.yes_ask !== null
+            ? market.yes_ask
+            : market.yes_bid !== undefined && market.yes_bid !== null
+            ? market.yes_bid
+            : market.last_price !== undefined && market.last_price !== null
+            ? market.last_price
+            : mispricing.kalshiPrice;
+        } else {
+          // For NO, use no_ask if available, otherwise calculate from yes_ask/bid
+          if (market.no_ask !== undefined && market.no_ask !== null) {
+            buyPrice = market.no_ask;
+          } else if (market.no_bid !== undefined && market.no_bid !== null) {
+            buyPrice = market.no_bid;
+          } else if (market.yes_ask !== undefined && market.yes_ask !== null) {
+            // NO price = 100 - YES price
+            buyPrice = 100 - market.yes_ask;
+          } else if (market.yes_bid !== undefined && market.yes_bid !== null) {
+            buyPrice = 100 - market.yes_bid;
+          } else if (market.last_price !== undefined && market.last_price !== null) {
+            buyPrice = 100 - market.last_price;
+          } else {
+            buyPrice = 100 - mispricing.kalshiPrice;
+          }
+        }
+        console.log(`  Market ask price: ${buyPrice.toFixed(1)} cents (${side === 'yes' ? 'YES' : 'NO'})`);
+      } else {
+        // Fallback to using mispricing price if market not found
+        buyPrice = side === 'yes' ? mispricing.kalshiPrice : (100 - mispricing.kalshiPrice);
+        console.log(`  Warning: Could not fetch market data, using cached price: ${buyPrice.toFixed(1)} cents`);
+      }
+    } catch (error: any) {
+      // Fallback to using mispricing price if fetch fails
+      buyPrice = side === 'yes' ? mispricing.kalshiPrice : (100 - mispricing.kalshiPrice);
+      console.log(`  Warning: Could not fetch ask price, using cached price: ${buyPrice.toFixed(1)} cents (${error.message})`);
+    }
     
     // Calculate bet size in dollars based on MAX_BET_SIZE
     // Scale with mispricing size: larger mispricings get larger bets
