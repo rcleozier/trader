@@ -1,6 +1,7 @@
 import { PortfolioApi } from 'kalshi-typescript';
 import { config } from '../config';
 import { Mispricing } from '../types/markets';
+import { KalshiClient } from '../clients/kalshiClient';
 
 // ANSI color codes for console output
 const colors = {
@@ -19,10 +20,12 @@ export interface TradingConfig {
 export class TradingService {
   private portfolioApi: PortfolioApi;
   private tradingConfig: TradingConfig;
+  private kalshiClient?: KalshiClient;
 
-  constructor(portfolioApi: PortfolioApi, tradingConfig: TradingConfig) {
+  constructor(portfolioApi: PortfolioApi, tradingConfig: TradingConfig, kalshiClient?: KalshiClient) {
     this.portfolioApi = portfolioApi;
     this.tradingConfig = tradingConfig;
+    this.kalshiClient = kalshiClient;
   }
 
   /**
@@ -34,15 +37,69 @@ export class TradingService {
   }
 
   /**
+   * Check if there's a pending/resting order for a market ticker
+   * Checks for ANY order on this market, regardless of side or status
+   */
+  hasPendingOrder(marketTicker: string, activeOrders: any[]): boolean {
+    // Check for any order on this market ticker with remaining count > 0
+    const matchingOrders = activeOrders.filter(
+      order => {
+        const tickerMatch = order.ticker === marketTicker;
+        const hasStatus = order.status === 'resting' || order.status === 'pending' || order.status === 'executed';
+        const hasRemaining = order.remaining_count && order.remaining_count > 0;
+        return tickerMatch && hasStatus && hasRemaining;
+      }
+    );
+    
+    if (matchingOrders.length > 0) {
+      // Log details for debugging
+      matchingOrders.forEach(order => {
+        console.log(`[TRADING] Found existing order: ${order.ticker} - ${order.side} ${order.action} ${order.remaining_count} @ ${order.yes_price || order.no_price} (status: ${order.status})`);
+      });
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
    * Place a buy order for a mispricing opportunity
    */
-  async placeTrade(mispricing: Mispricing, marketTicker: string, activePositions: any[] = []): Promise<{ success: boolean; orderId?: string; error?: string }> {
+  async placeTrade(mispricing: Mispricing, marketTicker: string, activePositions: any[] = [], activeOrders: any[] = []): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    // Refresh active orders right before checking to catch any recently placed orders
+    let currentActiveOrders = activeOrders;
+    if (this.kalshiClient) {
+      try {
+        const refreshedOrders = await this.kalshiClient.getActiveOrders();
+        currentActiveOrders = refreshedOrders;
+        // Log if we found new orders
+        if (refreshedOrders.length > activeOrders.length) {
+          console.log(`[TRADING] Refreshed orders: found ${refreshedOrders.length} active orders (was ${activeOrders.length})`);
+        }
+      } catch (error: any) {
+        // If refresh fails, use the original list
+        console.log(`[TRADING] Warning: Could not refresh orders, using cached list: ${error.message}`);
+      }
+    }
+
     // Check if we already have a position on this market
     if (this.hasExistingPosition(marketTicker, activePositions)) {
       const existingPosition = activePositions.find(pos => pos.ticker === marketTicker && pos.position && pos.position !== 0);
       const posCount = existingPosition?.position || 0;
       console.log(`[TRADING] Skipping trade - already have position: ${posCount} contracts on ${marketTicker}`);
       return { success: false, error: 'Existing position found' };
+    }
+
+    // Check if there's already a pending/resting order for this market (using refreshed list)
+    if (this.hasPendingOrder(marketTicker, currentActiveOrders)) {
+      const existingOrders = currentActiveOrders.filter(
+        order => order.ticker === marketTicker && 
+                 (order.status === 'resting' || order.status === 'pending') &&
+                 order.remaining_count && order.remaining_count > 0
+      );
+      const totalRemaining = existingOrders.reduce((sum, order) => sum + (order.remaining_count || 0), 0);
+      console.log(`[TRADING] Skipping trade - already have ${existingOrders.length} active order(s) with ${totalRemaining} contracts remaining on ${marketTicker}`);
+      return { success: false, error: 'Pending order found' };
     }
 
     // Determine if we should buy YES or NO

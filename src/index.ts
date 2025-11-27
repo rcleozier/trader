@@ -35,7 +35,7 @@ type GameData = {
 };
 import { config } from './config';
 
-async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = [], tradingService?: TradingService, balance?: number | null): Promise<GameData[]> {
+async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = [], activeOrders: any[] = [], tradingService?: TradingService, balance?: number | null): Promise<GameData[]> {
   const sportConfig = config.sports[sport];
   const sportName = sport.toUpperCase();
   const sportEmoji = sport === 'nba' ? '🏀' : sport === 'nfl' ? '🏈' : sport === 'nhl' ? '🏒' : sport === 'ncaab' ? '🏀' : sport === 'ncaaf' ? '🏈' : '';
@@ -244,11 +244,11 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
                 isKalshiOvervaluing: isKalshiOvervaluing,
               };
               
-              const tradeResult = await tradingService.placeTrade(mispricingForTrade, market.ticker, activePositions);
+              const tradeResult = await tradingService.placeTrade(mispricingForTrade, market.ticker, activePositions, activeOrders);
               if (tradeResult.success) {
                 console.log(`      ${colors.green}✅ Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
-              } else if (tradeResult.error !== 'Existing position found') {
-                // Only show error if it's not about existing position (that's expected)
+              } else if (tradeResult.error !== 'Existing position found' && tradeResult.error !== 'Pending order found') {
+                // Only show error if it's not about existing position or pending order (those are expected)
                 console.log(`      ${colors.red}❌ Trade failed: ${tradeResult.error}${colors.reset}`);
               }
             }
@@ -596,10 +596,19 @@ async function displayAccountInfo(): Promise<void> {
 }
 
 async function runMispricingCheck(): Promise<void> {
-  // Display account info first and get active positions
+  // Display account info first and get active positions and orders
   const kalshiClient = new KalshiClient();
   const balance = await kalshiClient.getBalance();
   const activePositions = await kalshiClient.getActivePositions();
+  const activeOrders = await kalshiClient.getActiveOrders();
+  
+  // Log active orders count for debugging
+  if (activeOrders.length > 0) {
+    console.log(`\n${colors.bright}${colors.cyan}📋 Found ${activeOrders.length} active orders${colors.reset}`);
+    activeOrders.forEach((order, idx) => {
+      console.log(`  ${idx + 1}. ${order.ticker} - ${order.side} ${order.action} ${order.remaining_count || 0} (status: ${order.status})`);
+    });
+  }
   
   // Display account info
   await displayAccountInfo();
@@ -607,8 +616,8 @@ async function runMispricingCheck(): Promise<void> {
   // Initialize trading service if configured
   let tradingService: TradingService | undefined;
   if (config.trading) {
-    // Use the same KalshiClient instance to access PortfolioApi
-    tradingService = new TradingService(kalshiClient.portfolioApi, config.trading);
+    // Use the same KalshiClient instance to access PortfolioApi and refresh orders
+    tradingService = new TradingService(kalshiClient.portfolioApi, config.trading, kalshiClient);
     
     if (config.trading.liveTrades) {
       console.log(`\n${colors.bright}${colors.yellow}⚠️  LIVE TRADING ENABLED${colors.reset}`);
@@ -617,12 +626,12 @@ async function runMispricingCheck(): Promise<void> {
     }
   }
   
-  // Run checks for all sports, passing active positions and trading service
-  await runMispricingCheckForSport('nba', activePositions, tradingService, balance);
-  await runMispricingCheckForSport('nfl', activePositions, tradingService, balance);
-  await runMispricingCheckForSport('nhl', activePositions, tradingService, balance);
-  await runMispricingCheckForSport('ncaab', activePositions, tradingService, balance);
-  await runMispricingCheckForSport('ncaaf', activePositions, tradingService, balance);
+  // Run checks for all sports, passing active positions, orders, and trading service
+  await runMispricingCheckForSport('nba', activePositions, activeOrders, tradingService, balance);
+  await runMispricingCheckForSport('nfl', activePositions, activeOrders, tradingService, balance);
+  await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance);
+  await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance);
+  await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance);
   
   // PDF generation disabled - code kept for future use
   // To re-enable: uncomment below and configure email in .env
