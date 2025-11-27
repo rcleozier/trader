@@ -8,7 +8,7 @@ export class KalshiClient {
   private marketsApi: MarketsApi;
   private eventsApi: EventsApi;
   private seriesApi: SeriesApi;
-  private portfolioApi: PortfolioApi;
+  public portfolioApi: PortfolioApi; // Made public for trading service access
   private kalshiConfig: Configuration;
   private axiosClient: any;
 

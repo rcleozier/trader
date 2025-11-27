@@ -59,6 +59,11 @@ interface Config {
     mispricingThresholdPct: number;
     runScheduleCron?: string;
   };
+  trading: {
+    liveTrades: boolean;
+    minBalanceToBet: number;
+      maxBetSize?: number;
+  };
 }
 
 function requireEnv(key: string): string {
@@ -137,6 +142,11 @@ export const config: Config = {
   bot: {
     mispricingThresholdPct: parseFloat(getOptionalEnv('MISPRICING_THRESHOLD_PCT', '0.05') || '0.05'),
     runScheduleCron: getOptionalEnv('RUN_SCHEDULE_CRON'),
+  },
+  trading: {
+    liveTrades: getOptionalEnv('LIVE_TRADES', 'false') === 'true',
+    minBalanceToBet: parseFloat(getOptionalEnv('MIN_BALANCE_TO_BET', '10') || '10'),
+    maxBetSize: getOptionalEnv('MAX_BET_SIZE') ? parseFloat(getOptionalEnv('MAX_BET_SIZE')!) : undefined,
   },
 };
 

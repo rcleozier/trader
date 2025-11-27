@@ -2,11 +2,40 @@ import cron from 'node-cron';
 import { KalshiClient } from './clients/kalshiClient';
 import { ESPNClient } from './clients/espnClient';
 import { MispricingService } from './services/mispricingService';
-import { PDFService, ReportData } from './services/pdfService';
-import { EmailService } from './services/emailService';
+import { TradingService } from './services/tradingService';
+// PDF and Email services disabled - code kept for future use
+// import { PDFService, ReportData } from './services/pdfService';
+// import { EmailService } from './services/emailService';
+
+// Minimal type for games data (PDF generation disabled)
+type GameSideData = {
+  team: string;
+  side: string;
+  kalshiPrice: number;
+  kalshiProb: number;
+  espnOdds: number;
+  espnProb: number;
+  diffPct: number;
+  isOverThreshold: boolean;
+  isKalshiOvervaluing: boolean;
+  hasPosition: boolean;
+  positionCount?: number;
+  positionSide?: string;
+  positionPayout?: number;
+};
+
+type GameData = {
+  sport: string;
+  gameId: string;
+  awayTeam: string;
+  homeTeam: string;
+  scheduledTime: string;
+  status: string;
+  sides: GameSideData[];
+};
 import { config } from './config';
 
-async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = []): Promise<ReportData['games']> {
+async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = [], tradingService?: TradingService, balance?: number | null): Promise<GameData[]> {
   const sportConfig = config.sports[sport];
   const sportName = sport.toUpperCase();
   const sportEmoji = sport === 'nba' ? '🏀' : sport === 'nfl' ? '🏈' : sport === 'nhl' ? '🏒' : sport === 'ncaab' ? '🏀' : sport === 'ncaaf' ? '🏈' : '';
@@ -38,7 +67,7 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
     }
 
     // Collect games data for PDF report
-    const gamesData: ReportData['games'] = [];
+    const gamesData: GameData[] = [];
     
     // Display all games with comparison data
     let gameIndex = 0;
@@ -75,7 +104,7 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
       console.log('');
 
       // Collect sides data for PDF
-      const sidesData: ReportData['games'][0]['sides'] = [];
+      const sidesData: GameSideData[] = [];
       
       // Show each team's comparison data
       const sidesToShow = [
@@ -195,6 +224,34 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
             console.log(`      ${colors.yellow}💰 OPPORTUNITY:${colors.reset} Kalshi overvalues ${team} - bet against on Kalshi`);
           } else {
             console.log(`      ${colors.green}💰 OPPORTUNITY:${colors.reset} Kalshi undervalues ${team} - bet on Kalshi`);
+          }
+          
+          // Attempt to place trade if trading is enabled
+          if (tradingService && market) {
+            // Check if we should place trade
+            const shouldTrade = await tradingService.shouldPlaceTrade(balance || null);
+            if (shouldTrade) {
+              // Create a mispricing object for the trading service
+              const mispricingForTrade: any = {
+                game: comparison.game,
+                side: side,
+                kalshiPrice: data.kalshi.price,
+                kalshiImpliedProbability: data.kalshi.prob,
+                sportsbookOdds: data.espn.odds,
+                sportsbookImpliedProbability: data.espn.prob,
+                difference: data.diff || 0,
+                differencePct: data.diffPct || 0,
+                isKalshiOvervaluing: isKalshiOvervaluing,
+              };
+              
+              const tradeResult = await tradingService.placeTrade(mispricingForTrade, market.ticker, activePositions);
+              if (tradeResult.success) {
+                console.log(`      ${colors.green}✅ Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
+              } else if (tradeResult.error !== 'Existing position found') {
+                // Only show error if it's not about existing position (that's expected)
+                console.log(`      ${colors.red}❌ Trade failed: ${tradeResult.error}${colors.reset}`);
+              }
+            }
           }
         }
         console.log('');
@@ -547,35 +604,29 @@ async function runMispricingCheck(): Promise<void> {
   // Display account info
   await displayAccountInfo();
   
-  // Collect report data
-  const reportData: ReportData = {
-    balance: balance || undefined,
-    positions: activePositions.map(pos => ({
-      ticker: pos.ticker || '',
-      side: pos.market_result === 'yes' ? 'YES' : 'NO',
-      position: pos.position || 0,
-      cost: pos.total_cost ? pos.total_cost / 100 : (pos.estimated_value ? pos.estimated_value / 100 : 0),
-      payout: pos.position && pos.market_result === 'yes' ? pos.position * 1.00 : undefined,
-      pnl: pos.realized_pnl ? pos.realized_pnl / 100 : 0,
-      gameInfo: pos.ticker ? (() => {
-        const gameInfo = parseTickerToGame(pos.ticker);
-        return gameInfo ? `${gameInfo.awayTeam} @ ${gameInfo.homeTeam}` : pos.ticker;
-      })() : undefined,
-    })),
-    games: [],
-  };
+  // Initialize trading service if configured
+  let tradingService: TradingService | undefined;
+  if (config.trading) {
+    // Use the same KalshiClient instance to access PortfolioApi
+    tradingService = new TradingService(kalshiClient.portfolioApi, config.trading);
+    
+    if (config.trading.liveTrades) {
+      console.log(`\n${colors.bright}${colors.yellow}⚠️  LIVE TRADING ENABLED${colors.reset}`);
+    } else {
+      console.log(`\n${colors.bright}${colors.gray}DRY RUN MODE - No actual trades will be placed${colors.reset}`);
+    }
+  }
   
-  // Run checks for all sports, passing active positions
-  const nbaGames = await runMispricingCheckForSport('nba', activePositions);
-  const nflGames = await runMispricingCheckForSport('nfl', activePositions);
-  const nhlGames = await runMispricingCheckForSport('nhl', activePositions);
-  const ncaabGames = await runMispricingCheckForSport('ncaab', activePositions);
-  const ncaafGames = await runMispricingCheckForSport('ncaaf', activePositions);
+  // Run checks for all sports, passing active positions and trading service
+  await runMispricingCheckForSport('nba', activePositions, tradingService, balance);
+  await runMispricingCheckForSport('nfl', activePositions, tradingService, balance);
+  await runMispricingCheckForSport('nhl', activePositions, tradingService, balance);
+  await runMispricingCheckForSport('ncaab', activePositions, tradingService, balance);
+  await runMispricingCheckForSport('ncaaf', activePositions, tradingService, balance);
   
-  // Combine all games
-  reportData.games = [...nbaGames, ...nflGames, ...nhlGames, ...ncaabGames, ...ncaafGames];
-  
-  // Generate PDF and send email
+  // PDF generation disabled - code kept for future use
+  // To re-enable: uncomment below and configure email in .env
+  /*
   if (config.sendgrid || config.email) {
     try {
       const pdfService = new PDFService();
@@ -591,6 +642,7 @@ async function runMispricingCheck(): Promise<void> {
       console.error(`${colors.red}❌ Failed to generate/send PDF report: ${error.message}${colors.reset}`);
     }
   }
+  */
 }
 
 // Main execution
