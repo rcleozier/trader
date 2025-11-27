@@ -548,14 +548,23 @@ async function displayAccountInfo(): Promise<void> {
       }
       
       // Show current price if available
-      let priceInfo = '';
+      let priceText = '';
       if (pos.current_price !== undefined) {
-        priceInfo = ` | ${colors.gray}Price:${colors.reset} ${colors.cyan}${pos.current_price.toFixed(1)}${colors.reset}`;
+        priceText = ` @ ${colors.cyan}${pos.current_price.toFixed(1)}¢${colors.reset}`;
       }
       
-      // Display with better formatting
+      // Human-friendly single-line summary
+      const positionWord = positionCount < 0 ? 'Short' : 'Long';
+      const absCount = Math.abs(positionCount);
+      const contractsText = `${absCount} contract${absCount === 1 ? '' : 's'}`;
+      
       console.log(`  ${colors.bright}${idx + 1}.${colors.reset} ${sportEmoji} ${colors.bright}${colors.yellow}${matchDisplay}${colors.reset}${teamDisplay}`);
-      console.log(`     ${colors.gray}Side:${colors.reset} ${sideLabel} | ${colors.gray}Position:${colors.reset} ${positionLabel} | ${colors.gray}Cost:${colors.reset} ${costLabel}${priceInfo}${payoutInfo} | ${colors.gray}P&L:${colors.reset} ${pnlLabel}`);
+      console.log(
+        `     ${positionColor}${positionWord} ${contractsText}${colors.reset} ` +
+        `on ${sideLabel}${priceText} ` +
+        `| ${colors.gray}Cost${colors.reset} ${costLabel}${payoutInfo} ` +
+        `| ${colors.gray}Realized P&L${colors.reset} ${pnlLabel}`
+      );
     });
   } else {
     console.log(`\n${colors.bright}${colors.cyan}📊 Active Positions:${colors.reset} ${colors.gray}None${colors.reset}`);
