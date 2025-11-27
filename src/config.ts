@@ -27,12 +27,33 @@ interface Config {
       espnPath: string;
       kalshiSeries: string;
     };
+    ncaab: {
+      espnPath: string;
+      kalshiSeries: string;
+    };
+    ncaaf: {
+      espnPath: string;
+      kalshiSeries: string;
+    };
   };
   twilio?: {
     accountSid: string;
     authToken: string;
     fromNumber: string;
     alertToNumber: string;
+  };
+  sendgrid?: {
+    apiKey: string;
+    emailAddress: string;
+  };
+  email?: {
+    smtpHost: string;
+    smtpPort: number;
+    smtpSecure: boolean;
+    smtpUser: string;
+    smtpPassword: string;
+    fromEmail: string;
+    toEmail: string;
   };
   bot: {
     mispricingThresholdPct: number;
@@ -85,12 +106,33 @@ export const config: Config = {
       espnPath: 'hockey/nhl/scoreboard',
       kalshiSeries: 'KXNHLGAME',
     },
+    ncaab: {
+      espnPath: 'basketball/mens-college-basketball/scoreboard',
+      kalshiSeries: 'KXNCAABGAME',
+    },
+    ncaaf: {
+      espnPath: 'football/college-football/scoreboard',
+      kalshiSeries: 'KXNCAAGAME',
+    },
   },
   twilio: getOptionalEnv('TWILIO_ACCOUNT_SID') ? {
     accountSid: requireEnv('TWILIO_ACCOUNT_SID'),
     authToken: requireEnv('TWILIO_AUTH_TOKEN'),
     fromNumber: requireEnv('TWILIO_FROM_NUMBER'),
     alertToNumber: requireEnv('ALERT_TO_NUMBER'),
+  } : undefined,
+  sendgrid: getOptionalEnv('SEND_GRID') ? {
+    apiKey: requireEnv('SEND_GRID'),
+    emailAddress: requireEnv('EMAIL_ADDRESS'),
+  } : undefined,
+  email: getOptionalEnv('SMTP_HOST') ? {
+    smtpHost: requireEnv('SMTP_HOST'),
+    smtpPort: parseInt(getOptionalEnv('SMTP_PORT', '587') || '587', 10),
+    smtpSecure: getOptionalEnv('SMTP_SECURE', 'false') === 'true',
+    smtpUser: requireEnv('SMTP_USER'),
+    smtpPassword: requireEnv('SMTP_PASSWORD'),
+    fromEmail: requireEnv('EMAIL_FROM'),
+    toEmail: requireEnv('EMAIL_TO'),
   } : undefined,
   bot: {
     mispricingThresholdPct: parseFloat(getOptionalEnv('MISPRICING_THRESHOLD_PCT', '0.05') || '0.05'),

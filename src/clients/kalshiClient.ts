@@ -35,7 +35,7 @@ export class KalshiClient {
   /**
    * Fetch markets from Kalshi for a specific series
    */
-  async fetchMarkets(seriesTicker: string, sport: 'nba' | 'nfl' | 'nhl' = 'nba'): Promise<Market[]> {
+  async fetchMarkets(seriesTicker: string, sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Promise<Market[]> {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
       
@@ -118,7 +118,7 @@ export class KalshiClient {
   /**
    * Parse raw Kalshi market data into our Market format
    */
-  private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' | 'nhl' = 'nba'): Market[] {
+  private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Market[] {
     const markets: Market[] = [];
 
     for (const raw of rawMarkets) {
@@ -162,7 +162,7 @@ export class KalshiClient {
    * Kalshi ticker format: KXNBAGAME-25NOV28DALLAL-LAL
    * Event ticker format: KXNBAGAME-25NOV28DALLAL (contains both team abbreviations)
    */
-  private extractGameInfo(raw: any, sport: 'nba' | 'nfl' | 'nhl' = 'nba'): Game | null {
+  private extractGameInfo(raw: any, sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Game | null {
     const title = (raw.title || raw.name || '').toString();
     const ticker = (raw.ticker || '').toString();
     const eventTicker = (raw.event_ticker || '').toString();
@@ -199,8 +199,17 @@ export class KalshiClient {
       'WSH': 'WSH', 'WPG': 'WPG'
     };
     
-    const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : sport === 'nhl' ? nhlTeamAbbrevMap : nbaTeamAbbrevMap;
-    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : sport === 'nhl' ? 'KXNHLGAME' : 'KXNBAGAME';
+    // For college sports, we'll use a simplified approach - just try to parse the ticker
+    // College teams have many variations, so we'll be more flexible
+    const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : 
+                         sport === 'nhl' ? nhlTeamAbbrevMap : 
+                         sport === 'ncaab' || sport === 'ncaaf' ? {} : // Empty map for college - will parse from ticker
+                         nbaTeamAbbrevMap;
+    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 
+                        sport === 'nhl' ? 'KXNHLGAME' : 
+                        sport === 'ncaab' ? 'KXNCAABGAME' :
+                        sport === 'ncaaf' ? 'KXNCAAGAME' :
+                        'KXNBAGAME';
     
     // Try to extract from event ticker first (most reliable)
     // Format: KXNBAGAME-25NOV28DALLAL or kxnflgame-25DEC01NYGNE
@@ -309,6 +318,23 @@ export class KalshiClient {
                 homeAbbrev = abbrev2Full;
                 break;
               }
+            } else if (sport === 'ncaab' || sport === 'ncaaf') {
+              // For college sports, if we can't find in map, use the abbreviations directly
+              if (abbrev1 && abbrev2) {
+                // Check which matches the side abbreviation
+                if (abbrev1 === sideAbbrev || abbrev1.startsWith(sideAbbrev) || sideAbbrev.startsWith(abbrev1)) {
+                  homeAbbrev = abbrev1;
+                  awayAbbrev = abbrev2;
+                } else if (abbrev2 === sideAbbrev || abbrev2.startsWith(sideAbbrev) || sideAbbrev.startsWith(abbrev2)) {
+                  homeAbbrev = abbrev2;
+                  awayAbbrev = abbrev1;
+                } else {
+                  // Default: first is away, second is home
+                  awayAbbrev = abbrev1;
+                  homeAbbrev = abbrev2;
+                }
+                break;
+              }
             }
           }
         }
@@ -325,6 +351,20 @@ export class KalshiClient {
         }
       } else if (sport === 'nhl') {
         const result = this.parseNHLTitle(title);
+        if (result) {
+          awayAbbrev = result.away;
+          homeAbbrev = result.home;
+        }
+      } else if (sport === 'ncaab') {
+        // For college basketball, try to parse from title (similar to NBA)
+        const result = this.parseNBATitle(title); // Use NBA parser as format is similar
+        if (result) {
+          awayAbbrev = result.away;
+          homeAbbrev = result.home;
+        }
+      } else if (sport === 'ncaaf') {
+        // For college football, try to parse from title (similar to NFL)
+        const result = this.parseNFLTitle(title); // Use NFL parser as format is similar
         if (result) {
           awayAbbrev = result.away;
           homeAbbrev = result.home;

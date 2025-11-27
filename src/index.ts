@@ -2,22 +2,29 @@ import cron from 'node-cron';
 import { KalshiClient } from './clients/kalshiClient';
 import { ESPNClient } from './clients/espnClient';
 import { MispricingService } from './services/mispricingService';
+import { PDFService, ReportData } from './services/pdfService';
+import { EmailService } from './services/emailService';
 import { config } from './config';
 
-async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl', activePositions: any[] = []): Promise<void> {
+async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = []): Promise<ReportData['games']> {
   const sportConfig = config.sports[sport];
+  const sportName = sport.toUpperCase();
+  const sportEmoji = sport === 'nba' ? '🏀' : sport === 'nfl' ? '🏈' : sport === 'nhl' ? '🏒' : sport === 'ncaab' ? '🏀' : sport === 'ncaaf' ? '🏈' : '';
 
   try {
     // Fetch data from both sources
     const kalshiClient = new KalshiClient();
     const kalshiMarkets = await kalshiClient.fetchMarkets(sportConfig.kalshiSeries, sport);
+    console.log(`\n${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${kalshiMarkets.length}${colors.reset} Kalshi markets`);
     
     const espnClient = new ESPNClient();
     const espnOdds = await espnClient.fetchGamesWithOdds(sportConfig.espnPath);
+    console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${espnOdds.length}${colors.reset} ESPN games with odds`);
 
-    // Find mispricings
+    // Find mispricings and comparisons
     const mispricingService = new MispricingService();
-    const { mispricings } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
+    const { mispricings, comparisons } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
+    console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${comparisons.length}${colors.reset} games with comparison data`);
     
     // Create a map of positions by ticker - store array since there can be both YES and NO positions
     const positionsByTicker = new Map<string, any[]>();
@@ -30,106 +37,194 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl', activePo
       }
     }
 
-    // Group mispricings by game
-    const gameMap = new Map<string, typeof mispricings>();
-    for (const mispricing of mispricings) {
-      const gameKey = mispricing.game.id || `${mispricing.game.awayTeam}-${mispricing.game.homeTeam}`;
-      if (!gameMap.has(gameKey)) {
-        gameMap.set(gameKey, []);
-      }
-      gameMap.get(gameKey)!.push(mispricing);
-    }
-
-    // Display in the requested format
+    // Collect games data for PDF report
+    const gamesData: ReportData['games'] = [];
+    
+    // Display all games with comparison data
     let gameIndex = 0;
-    for (const [gameKey, gameMispricings] of gameMap.entries()) {
-      if (gameMispricings.length === 0) continue;
+    for (const comparison of comparisons) {
+      // Only show games that have at least one side with both Kalshi and ESPN data
+      if (!comparison.home.kalshi && !comparison.home.espn && !comparison.away.kalshi && !comparison.away.espn) {
+        continue;
+      }
+      if (!comparison.home.kalshi && !comparison.away.kalshi) {
+        continue; // Need at least one Kalshi market
+      }
+      if (!comparison.home.espn && !comparison.away.espn) {
+        continue; // Need at least one ESPN odds
+      }
       
       gameIndex++;
-      const firstMispricing = gameMispricings[0];
-      const gameLabel = `${firstMispricing.game.awayTeam} @ ${firstMispricing.game.homeTeam}`;
       
       // Format scheduled time
-      const scheduledDate = new Date(firstMispricing.game.scheduledTime);
+      const scheduledDate = new Date(comparison.game.scheduledTime);
       const scheduledStr = scheduledDate.toISOString().replace(/\.\d{3}Z$/, 'Z');
       
       // Format status
-      const status = firstMispricing.game.status || 'STATUS_UNKNOWN';
+      const status = comparison.game.status || 'STATUS_UNKNOWN';
       const statusStr = status.toUpperCase().replace(/\s+/g, '_');
       
       // Display game header with clear team names
-      const awayTeam = firstMispricing.game.awayTeam;
-      const homeTeam = firstMispricing.game.homeTeam;
-      const sportEmoji = sport === 'nba' ? '🏀' : sport === 'nfl' ? '🏈' : sport === 'nhl' ? '🏒' : '';
-      console.log(`${colors.bright}${colors.yellow}[${gameIndex}]${colors.reset} ${sportEmoji} ${colors.bright}${colors.cyan}${awayTeam}${colors.reset} ${colors.gray}@${colors.reset} ${colors.bright}${colors.magenta}${homeTeam}${colors.reset}`);
-      console.log(`${colors.gray}    Game ID:${colors.reset} ${firstMispricing.game.id || gameKey}`);
+      const awayTeam = comparison.game.awayTeam;
+      const homeTeam = comparison.game.homeTeam;
+      const sportEmoji = sport === 'nba' ? '🏀' : sport === 'nfl' ? '🏈' : sport === 'nhl' ? '🏒' : sport === 'ncaab' ? '🏀' : sport === 'ncaaf' ? '🏈' : '';
+      console.log(`\n${sportEmoji} ${colors.bright}${colors.yellow}[${gameIndex}]${colors.reset} ${colors.bright}${colors.cyan}${awayTeam}${colors.reset} ${colors.gray}@${colors.reset} ${colors.bright}${colors.magenta}${homeTeam}${colors.reset}`);
+      console.log(`${colors.gray}    Game ID:${colors.reset} ${comparison.game.id}`);
       console.log(`${colors.gray}    Scheduled:${colors.reset} ${scheduledStr}`);
       console.log(`${colors.gray}    Status:${colors.reset} ${statusStr}`);
       console.log('');
 
-      // Show each team's mispricing
-      for (const mispricing of gameMispricings) {
-        const team = mispricing.side === 'home' ? mispricing.game.homeTeam : mispricing.game.awayTeam;
-        const opponent = mispricing.side === 'home' ? mispricing.game.awayTeam : mispricing.game.homeTeam;
-        const side = mispricing.side.toUpperCase();
-        const teamColor = mispricing.side === 'home' ? colors.magenta : colors.cyan;
-        const kalshiPct = (mispricing.kalshiImpliedProbability * 100).toFixed(2);
-        const espnPct = (mispricing.sportsbookImpliedProbability * 100).toFixed(2);
-        const diffPct = mispricing.differencePct.toFixed(2);
-        const diffAbs = (mispricing.difference * 100).toFixed(2);
-        const espnOddsStr = mispricing.sportsbookOdds > 0 ? `+${mispricing.sportsbookOdds}` : `${mispricing.sportsbookOdds}`;
+      // Collect sides data for PDF
+      const sidesData: ReportData['games'][0]['sides'] = [];
+      
+      // Show each team's comparison data
+      const sidesToShow = [
+        { side: 'away', team: awayTeam, opponent: homeTeam, data: comparison.away },
+        { side: 'home', team: homeTeam, opponent: awayTeam, data: comparison.home },
+      ];
+
+      for (const { side, team, opponent, data } of sidesToShow) {
+        // Only show if we have both Kalshi and ESPN data
+        if (!data.kalshi || !data.espn) continue;
+        const sideLabel = side.toUpperCase();
+        const teamColor = side === 'home' ? colors.magenta : colors.cyan;
+        const kalshiPct = (data.kalshi.prob * 100).toFixed(2);
+        const espnPct = (data.espn.prob * 100).toFixed(2);
+        const diffPct = data.diffPct ? data.diffPct.toFixed(2) : '0.00';
+        const diffAbs = data.diff ? (data.diff * 100).toFixed(2) : '0.00';
+        const espnOddsStr = data.espn.odds > 0 ? `+${data.espn.odds}` : `${data.espn.odds}`;
+        const isOverThreshold = data.isOverThreshold || false;
+        const isKalshiOvervaluing = data.kalshi.prob > data.espn.prob;
         
-        // Find matching position by ticker - need to find the market ticker for this mispricing
-        // Match by game teams and side
+        // Find matching position by checking all positions for this game and team
         let positionInfo = '';
-        const mispricingMarket = kalshiMarkets.find(m => {
-          const gameMatch = (m.game.awayTeam === mispricing.game.awayTeam && 
-                           m.game.homeTeam === mispricing.game.homeTeam) ||
-                          (m.game.awayTeam === mispricing.game.homeTeam && 
-                           m.game.homeTeam === mispricing.game.awayTeam);
-          return gameMatch && m.side === mispricing.side;
-        });
+        const targetTeam = team;
         
-        if (mispricingMarket && mispricingMarket.ticker) {
-          const positions = positionsByTicker.get(mispricingMarket.ticker) || [];
-          // Show any position on this market (YES or NO)
-          // For this mispricing (which is for a team winning), YES = team wins, NO = team loses
-          if (positions.length > 0) {
-            // Find YES position first (most relevant for team winning), otherwise show any position
-            let position = positions.find(p => p.market_result === 'yes');
-            if (!position) {
-              position = positions[0]; // Show any position if no YES found
-            }
+        // Find all positions that match this game
+        const matchingPositions: any[] = [];
+        for (const [ticker, posArray] of positionsByTicker.entries()) {
+          const tickerGameInfo = parseTickerToGame(ticker);
+          if (tickerGameInfo) {
+            // Check if this is the same game
+            const isSameGame = (tickerGameInfo.awayTeam === comparison.game.awayTeam && 
+                               tickerGameInfo.homeTeam === comparison.game.homeTeam) ||
+                              (tickerGameInfo.awayTeam === comparison.game.homeTeam && 
+                               tickerGameInfo.homeTeam === comparison.game.awayTeam);
             
-            if (position) {
-              const posSide = position.market_result === 'yes' ? 'YES' : 'NO';
-              const posCount = position.position || 0;
-              const posColor = posCount > 0 ? colors.green : colors.gray;
-              // Calculate payout for YES position (each contract pays $1 if it wins)
-              // For NO positions, payout would be different, but we'll show it anyway
-              const payout = posSide === 'YES' && posCount > 0 ? posCount * 1.00 : 0;
-              const payoutText = payout > 0 ? ` (Payout: $${payout.toFixed(2)})` : '';
-              positionInfo = ` | ${colors.bright}${colors.cyan}Active Position:${colors.reset} ${posColor}${posCount} ${posSide}${payoutText}${colors.reset}`;
+            if (isSameGame) {
+              // Check if this ticker is for the target team
+              const tickerTeam = tickerGameInfo.teamSide;
+              const isTargetTeam = tickerTeam === targetTeam || 
+                                   targetTeam.startsWith(tickerTeam) || 
+                                   tickerTeam.startsWith(targetTeam);
+              
+              if (isTargetTeam) {
+                matchingPositions.push(...posArray);
+              }
             }
           }
         }
         
-        // Display team name more prominently with opponent context
-        console.log(`    ${colors.bright}${teamColor}${team}${colors.reset} ${colors.gray}(${side})${colors.reset} ${colors.gray}vs ${opponent}${colors.reset}${positionInfo}`);
-        console.log(`      ${colors.gray}Kalshi Price:${colors.reset} ${mispricing.kalshiPrice} → ${kalshiPct}% implied probability`);
-        console.log(`      ${colors.gray}ESPN Odds:${colors.reset} ${espnOddsStr} → ${espnPct}% implied probability`);
-        console.log(`      ${colors.gray}Difference:${colors.reset} ${diffPct} percentage points (${diffAbs}% absolute)`);
+        // Also try exact ticker match from market
+        const market = kalshiMarkets.find(m => {
+          const gameMatch = (m.game.awayTeam === comparison.game.awayTeam && 
+                           m.game.homeTeam === comparison.game.homeTeam) ||
+                          (m.game.awayTeam === comparison.game.homeTeam && 
+                           m.game.homeTeam === comparison.game.awayTeam);
+          return gameMatch && m.side === side;
+        });
         
-        if (mispricing.isKalshiOvervaluing) {
-          console.log(`      ${colors.yellow}💰 OPPORTUNITY:${colors.reset} Kalshi overvalues ${team} - bet against on Kalshi`);
-        } else {
-          console.log(`      ${colors.green}💰 OPPORTUNITY:${colors.reset} Kalshi undervalues ${team} - bet on Kalshi`);
+        if (market && market.ticker) {
+          const exactTickerPositions = positionsByTicker.get(market.ticker) || [];
+          matchingPositions.push(...exactTickerPositions);
+        }
+        
+        // Remove duplicates
+        const uniquePositions = Array.from(new Map(matchingPositions.map(p => [p.ticker + (p.market_result || ''), p])).values());
+        
+        let hasPosition = false;
+        let positionCount = 0;
+        let positionSide = '';
+        let positionPayout = 0;
+        
+        if (uniquePositions.length > 0) {
+          // Prioritize YES positions
+          let position = uniquePositions.find(p => p.market_result === 'yes');
+          if (!position) {
+            position = uniquePositions[0];
+          }
+          
+          if (position) {
+            hasPosition = true;
+            const posSide = position.market_result === 'yes' ? 'YES' : 'NO';
+            positionCount = position.position || 0;
+            const posColor = positionCount > 0 ? colors.green : colors.gray;
+            positionPayout = posSide === 'YES' && positionCount > 0 ? positionCount * 1.00 : 0;
+            const payoutText = positionPayout > 0 ? ` (Payout: $${positionPayout.toFixed(2)})` : '';
+            positionInfo = ` | ${colors.bright}${colors.cyan}Active Position:${colors.reset} ${posColor}${positionCount} ${posSide}${payoutText}${colors.reset}`;
+            positionSide = posSide;
+          }
+        }
+        
+        // Add to PDF data
+        sidesData.push({
+          team,
+          side: sideLabel,
+          kalshiPrice: data.kalshi.price,
+          kalshiProb: data.kalshi.prob,
+          espnOdds: data.espn.odds,
+          espnProb: data.espn.prob,
+          diffPct: data.diffPct || 0,
+          isOverThreshold: isOverThreshold,
+          isKalshiOvervaluing: isKalshiOvervaluing,
+          hasPosition,
+          positionCount,
+          positionSide,
+          positionPayout,
+        });
+        
+        // Display team name with comparison data
+        const thresholdIndicator = isOverThreshold ? `${colors.yellow}⚠️ ABOVE THRESHOLD${colors.reset}` : `${colors.gray}Below threshold${colors.reset}`;
+        console.log(`    ${colors.bright}${teamColor}${team}${colors.reset} ${colors.gray}(${sideLabel})${colors.reset} ${colors.gray}vs ${opponent}${colors.reset}${positionInfo}`);
+        console.log(`      ${colors.gray}Kalshi Price:${colors.reset} ${data.kalshi.price} → ${kalshiPct}% implied probability`);
+        console.log(`      ${colors.gray}ESPN Odds:${colors.reset} ${espnOddsStr} → ${espnPct}% implied probability`);
+        console.log(`      ${colors.gray}Difference:${colors.reset} ${diffPct} percentage points (${diffAbs}% absolute) ${thresholdIndicator}`);
+        
+        if (isOverThreshold) {
+          if (isKalshiOvervaluing) {
+            console.log(`      ${colors.yellow}💰 OPPORTUNITY:${colors.reset} Kalshi overvalues ${team} - bet against on Kalshi`);
+          } else {
+            console.log(`      ${colors.green}💰 OPPORTUNITY:${colors.reset} Kalshi undervalues ${team} - bet on Kalshi`);
+          }
         }
         console.log('');
       }
+      
+      // Add game to PDF data
+      if (sidesData.length > 0) {
+        gamesData.push({
+          sport: sportName,
+          gameId: comparison.game.id,
+          awayTeam,
+          homeTeam,
+          scheduledTime: comparison.game.scheduledTime,
+          status: statusStr,
+          sides: sidesData,
+        });
+      }
     }
+    
+    if (comparisons.length === 0) {
+      console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: ${colors.gray}No games with both Kalshi and ESPN data found${colors.reset}`);
+    }
+    
+    return gamesData;
   } catch (error: any) {
-    // Silently continue - don't log errors
+    console.error(`${sportEmoji} ${colors.bright}${colors.red}${sportName} Error:${colors.reset} ${error.message}`);
+    if (error.stack) {
+      console.error(`${colors.gray}${error.stack}${colors.reset}`);
+    }
+    return [];
   }
 }
 
@@ -159,11 +254,16 @@ function formatPnl(pnl: number): string {
 
 function parseTicker(ticker: string): { sport: string; teams: string; side: string } | null {
   // Format: KXNBAGAME-25NOV26MINOKC-OKC or KXNFLGAME-25NOV30LACAR-LA or KXNHLGAME-25NOV30TORMTL-TOR
-  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
+  // or KXNCAABGAME-25NOV30DUKEUNC-DUKE or KXNCAAGAME-25NOV30ALABAMA-AUB
+  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL|KXNCAAB|KXNCAAG)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
   if (!match) return null;
   
   const sportPrefix = match[1];
-  const sport = sportPrefix === 'KXNBA' ? 'NBA' : sportPrefix === 'KXNFL' ? 'NFL' : 'NHL';
+  const sport = sportPrefix === 'KXNBA' ? 'NBA' : 
+                sportPrefix === 'KXNFL' ? 'NFL' : 
+                sportPrefix === 'KXNHL' ? 'NHL' :
+                sportPrefix === 'KXNCAAB' ? 'NCAAB' :
+                sportPrefix === 'KXNCAAG' ? 'NCAAF' : '';
   const combined = match[3];
   const side = match[4];
   
@@ -173,12 +273,17 @@ function parseTicker(ticker: string): { sport: string; teams: string; side: stri
 
 function parseTickerToGame(ticker: string): { awayTeam: string; homeTeam: string; teamSide: string; sport: string } | null {
   // Format: KXNFLGAME-25NOV30LACAR-LA or KXNHLGAME-25NOV30TORMTL-TOR
+  // or KXNCAABGAME-25NOV30DUKEUNC-DUKE or KXNCAAGAME-25NOV30ALABAMA-AUB
   // combined = LACAR (LAR + CAR), side = LA (which is LAR)
-  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
+  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL|KXNCAAB|KXNCAAG)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
   if (!match) return null;
   
   const sportPrefix = match[1];
-  const sport = sportPrefix === 'KXNBA' ? 'NBA' : sportPrefix === 'KXNFL' ? 'NFL' : 'NHL';
+  const sport: 'NBA' | 'NFL' | 'NHL' | 'NCAAB' | 'NCAAF' = sportPrefix === 'KXNBA' ? 'NBA' : 
+                sportPrefix === 'KXNFL' ? 'NFL' : 
+                sportPrefix === 'KXNHL' ? 'NHL' :
+                sportPrefix === 'KXNCAAB' ? 'NCAAB' :
+                sportPrefix === 'KXNCAAG' ? 'NCAAF' : 'NBA'; // Default to NBA if unknown
   const combined = match[3];
   const sideAbbrev = match[4];
   
@@ -214,7 +319,12 @@ function parseTickerToGame(ticker: string): { awayTeam: string; homeTeam: string
     'WSH': 'WSH', 'WPG': 'WPG'
   };
   
-  const teamAbbrevMap = sport === 'NFL' ? nflTeamAbbrevMap : sport === 'NHL' ? nhlTeamAbbrevMap : nbaTeamAbbrevMap;
+  // For college sports, we don't have a comprehensive team map, so we'll parse directly from ticker
+  // College teams have many variations and abbreviations, so we'll be more flexible
+  const teamAbbrevMap = sport === 'NFL' ? nflTeamAbbrevMap : 
+                       sport === 'NHL' ? nhlTeamAbbrevMap : 
+                       sport === 'NCAAB' || sport === 'NCAAF' ? {} : // Empty for college - parse from ticker
+                       nbaTeamAbbrevMap;
   
   // Handle partial abbreviations
   const partialToFull: { [key: string]: string } = sport === 'NFL' ? {
@@ -224,6 +334,8 @@ function parseTickerToGame(ticker: string): { awayTeam: string; homeTeam: string
     'SJ': 'SJS', // San Jose Sharks
     'NJ': 'NJD', // New Jersey Devils
     'TB': 'TBL', // Tampa Bay Lightning
+  } : sport === 'NCAAB' || sport === 'NCAAF' ? {
+    // College sports - minimal mapping, will parse from ticker directly
   } : {};
   
   const fullSideAbbrev = partialToFull[sideAbbrev] || sideAbbrev;
@@ -276,6 +388,24 @@ function parseTickerToGame(ticker: string): { awayTeam: string; homeTeam: string
           homeTeam = abbrev2Full;
         }
         break;
+      } else if (sport === 'NCAAB' || sport === 'NCAAF') {
+        // For college sports, if we can't find in map, use the abbreviations directly
+        // This handles cases where college team abbreviations aren't in our map
+        if (abbrev1 && abbrev2) {
+          // Check which matches the side abbreviation
+          if (abbrev1 === sideAbbrev || abbrev1.startsWith(sideAbbrev) || sideAbbrev.startsWith(abbrev1)) {
+            homeTeam = abbrev1;
+            awayTeam = abbrev2;
+          } else if (abbrev2 === sideAbbrev || abbrev2.startsWith(sideAbbrev) || sideAbbrev.startsWith(abbrev2)) {
+            homeTeam = abbrev2;
+            awayTeam = abbrev1;
+          } else {
+            // Default: first is away, second is home
+            awayTeam = abbrev1;
+            homeTeam = abbrev2;
+          }
+          break;
+        }
       }
     }
   }
@@ -327,7 +457,7 @@ async function displayAccountInfo(): Promise<void> {
       
       // Parse ticker to get game info
       const gameInfo = pos.ticker ? parseTickerToGame(pos.ticker) : null;
-      const sportEmoji = gameInfo?.sport === 'NBA' ? '🏀' : gameInfo?.sport === 'NFL' ? '🏈' : gameInfo?.sport === 'NHL' ? '🏒' : '';
+      const sportEmoji = gameInfo?.sport === 'NBA' ? '🏀' : gameInfo?.sport === 'NFL' ? '🏈' : gameInfo?.sport === 'NHL' ? '🏒' : gameInfo?.sport === 'NCAAB' ? '🏀' : gameInfo?.sport === 'NCAAF' ? '🏈' : '';
       
       // Display match in readable format
       let matchDisplay = pos.ticker || 'N/A';
@@ -411,15 +541,56 @@ async function displayAccountInfo(): Promise<void> {
 async function runMispricingCheck(): Promise<void> {
   // Display account info first and get active positions
   const kalshiClient = new KalshiClient();
+  const balance = await kalshiClient.getBalance();
   const activePositions = await kalshiClient.getActivePositions();
   
   // Display account info
   await displayAccountInfo();
   
-  // Run checks for NBA, NFL, and NHL, passing active positions
-  await runMispricingCheckForSport('nba', activePositions);
-  await runMispricingCheckForSport('nfl', activePositions);
-  await runMispricingCheckForSport('nhl', activePositions);
+  // Collect report data
+  const reportData: ReportData = {
+    balance: balance || undefined,
+    positions: activePositions.map(pos => ({
+      ticker: pos.ticker || '',
+      side: pos.market_result === 'yes' ? 'YES' : 'NO',
+      position: pos.position || 0,
+      cost: pos.total_cost ? pos.total_cost / 100 : (pos.estimated_value ? pos.estimated_value / 100 : 0),
+      payout: pos.position && pos.market_result === 'yes' ? pos.position * 1.00 : undefined,
+      pnl: pos.realized_pnl ? pos.realized_pnl / 100 : 0,
+      gameInfo: pos.ticker ? (() => {
+        const gameInfo = parseTickerToGame(pos.ticker);
+        return gameInfo ? `${gameInfo.awayTeam} @ ${gameInfo.homeTeam}` : pos.ticker;
+      })() : undefined,
+    })),
+    games: [],
+  };
+  
+  // Run checks for all sports, passing active positions
+  const nbaGames = await runMispricingCheckForSport('nba', activePositions);
+  const nflGames = await runMispricingCheckForSport('nfl', activePositions);
+  const nhlGames = await runMispricingCheckForSport('nhl', activePositions);
+  const ncaabGames = await runMispricingCheckForSport('ncaab', activePositions);
+  const ncaafGames = await runMispricingCheckForSport('ncaaf', activePositions);
+  
+  // Combine all games
+  reportData.games = [...nbaGames, ...nflGames, ...nhlGames, ...ncaabGames, ...ncaafGames];
+  
+  // Generate PDF and send email
+  if (config.sendgrid || config.email) {
+    try {
+      const pdfService = new PDFService();
+      const emailService = new EmailService();
+      
+      console.log(`\n${colors.bright}${colors.cyan}Generating PDF report...${colors.reset}`);
+      const pdfPath = await pdfService.generatePDF(reportData);
+      console.log(`${colors.green}✅ PDF generated: ${pdfPath}${colors.reset}`);
+      
+      console.log(`${colors.bright}${colors.cyan}Sending email report...${colors.reset}`);
+      await emailService.sendPDFReport(pdfPath);
+    } catch (error: any) {
+      console.error(`${colors.red}❌ Failed to generate/send PDF report: ${error.message}${colors.reset}`);
+    }
+  }
 }
 
 // Main execution

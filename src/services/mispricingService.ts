@@ -10,15 +10,15 @@ export class MispricingService {
     kalshiMarkets: Market[],
     espnOdds: SportsbookOdds[]
   ): { mispricings: Mispricing[]; comparisons: Array<{
-      game: { awayTeam: string; homeTeam: string };
-      home: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
-      away: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
+      game: { id: string; awayTeam: string; homeTeam: string; scheduledTime: string; status?: string };
+      home: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number }; diff?: number; diffPct?: number; isOverThreshold?: boolean };
+      away: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number }; diff?: number; diffPct?: number; isOverThreshold?: boolean };
     }> } {
     const mispricings: Mispricing[] = [];
     const comparisons: Array<{
-      game: { awayTeam: string; homeTeam: string };
-      home: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
-      away: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number } };
+      game: { id: string; awayTeam: string; homeTeam: string; scheduledTime: string; status?: string };
+      home: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number }; diff?: number; diffPct?: number; isOverThreshold?: boolean };
+      away: { espn?: { odds: number; prob: number }; kalshi?: { price: number; prob: number }; diff?: number; diffPct?: number; isOverThreshold?: boolean };
     }> = [];
     const gameMap = new Map<string, { espn?: SportsbookOdds; kalshi: { home?: Market; away?: Market } }>();
 
@@ -53,7 +53,13 @@ export class MispricingService {
 
       const [awayTeam, homeTeam] = gameKey.split('-');
       const comparison: typeof comparisons[0] = {
-        game: { awayTeam, homeTeam },
+        game: {
+          id: gameData.espn.game.id || gameKey,
+          awayTeam,
+          homeTeam,
+          scheduledTime: gameData.espn.game.scheduledTime || new Date().toISOString(),
+          status: gameData.espn.game.status,
+        },
         home: {},
         away: {},
       };
@@ -72,18 +78,28 @@ export class MispricingService {
         };
       }
 
-      // Add Kalshi data
-      if (gameData.kalshi.home) {
+      // Add Kalshi data and calculate differences
+      if (gameData.kalshi.home && comparison.home.espn) {
         comparison.home.kalshi = {
           price: gameData.kalshi.home.price,
           prob: gameData.kalshi.home.impliedProbability,
         };
+        const diff = Math.abs(gameData.kalshi.home.impliedProbability - comparison.home.espn.prob);
+        const diffPct = probabilityDifferencePct(gameData.kalshi.home.impliedProbability, comparison.home.espn.prob);
+        comparison.home.diff = diff;
+        comparison.home.diffPct = diffPct;
+        comparison.home.isOverThreshold = diffPct >= config.bot.mispricingThresholdPct * 100;
       }
-      if (gameData.kalshi.away) {
+      if (gameData.kalshi.away && comparison.away.espn) {
         comparison.away.kalshi = {
           price: gameData.kalshi.away.price,
           prob: gameData.kalshi.away.impliedProbability,
         };
+        const diff = Math.abs(gameData.kalshi.away.impliedProbability - comparison.away.espn.prob);
+        const diffPct = probabilityDifferencePct(gameData.kalshi.away.impliedProbability, comparison.away.espn.prob);
+        comparison.away.diff = diff;
+        comparison.away.diffPct = diffPct;
+        comparison.away.isOverThreshold = diffPct >= config.bot.mispricingThresholdPct * 100;
       }
 
       comparisons.push(comparison);
