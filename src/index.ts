@@ -47,14 +47,6 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
     const espnOdds = await espnClient.fetchGamesWithOdds(sportConfig.espnPath);
     console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${espnOdds.length}${colors.reset} ESPN games with odds`);
 
-    // Debug: Log sample team names for college sports
-    if (sport === 'ncaaf' && kalshiMarkets.length > 0) {
-      console.log(`  [DEBUG] Sample Kalshi team names: ${kalshiMarkets.slice(0, 3).map(m => `${m.game.awayTeam} @ ${m.game.homeTeam}`).join(', ')}`);
-    }
-    if (sport === 'ncaaf' && espnOdds.length > 0) {
-      console.log(`  [DEBUG] Sample ESPN team names: ${espnOdds.slice(0, 3).map(o => `${o.game.awayTeam} @ ${o.game.homeTeam}`).join(', ')}`);
-    }
-    
     // Find mispricings and comparisons
     const mispricingService = new MispricingService();
     const { mispricings, comparisons } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
