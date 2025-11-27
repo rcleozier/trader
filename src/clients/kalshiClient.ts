@@ -198,13 +198,18 @@ export class KalshiClient {
 
     for (const raw of rawMarkets) {
       try {
+        // Debug: Log ticker for college sports to see what we're getting
+        if ((sport === 'ncaaf' || sport === 'ncaab') && skippedGameInfo < 3) {
+          console.log(`  [DEBUG] Parsing ${sport.toUpperCase()} market: ticker=${raw.ticker || 'N/A'}, event_ticker=${raw.event_ticker || 'N/A'}, title=${raw.title || 'N/A'}`);
+        }
+        
         // Extract game information from market title/ticker
         const gameInfo = this.extractGameInfo(raw, sport);
         if (!gameInfo) {
           skippedGameInfo++;
-          if (sport === 'nhl' && skippedGameInfo <= 3) {
+          if ((sport === 'nhl' || sport === 'ncaaf' || sport === 'ncaab') && skippedGameInfo <= 3) {
             // Log first few failures for debugging
-            console.log(`  [DEBUG] Failed to extract game info for NHL market: ${raw.ticker || raw.event_ticker || 'N/A'} - Title: ${raw.title || 'N/A'}`);
+            console.log(`  [DEBUG] Failed to extract game info for ${sport.toUpperCase()} market: ${raw.ticker || raw.event_ticker || 'N/A'} - Title: ${raw.title || 'N/A'}`);
           }
           continue;
         }
@@ -383,6 +388,16 @@ export class KalshiClient {
               awayAbbrev = abbrev1Full;
               homeAbbrev = abbrev2Full;
               break;
+            } else if (sport === 'ncaab' || sport === 'ncaaf') {
+              // For college sports, if we can't find in map, use the abbreviations directly
+              // College teams have many variations, so we accept any reasonable split
+              // Try different split lengths to find the best match
+              if (abbrev1 && abbrev2 && abbrev1.length >= 2 && abbrev2.length >= 2) {
+                // Default: first is away, second is home
+                awayAbbrev = abbrev1;
+                homeAbbrev = abbrev2;
+                break;
+              }
             }
           }
         }
@@ -487,19 +502,15 @@ export class KalshiClient {
           homeAbbrev = result.home;
         }
       } else if (sport === 'ncaab') {
-        // For college basketball, try to parse from title (similar to NBA)
-        const result = this.parseNBATitle(title); // Use NBA parser as format is similar
-        if (result) {
-          awayAbbrev = result.away;
-          homeAbbrev = result.home;
-        }
+        // For college basketball, don't use NBA parser - it will incorrectly match NBA teams
+        // College basketball titles are too varied, so we skip title parsing for college sports
+        // and rely on ticker parsing only
+        // (Title parsing disabled for college sports to avoid NBA team mismatches)
       } else if (sport === 'ncaaf') {
-        // For college football, try to parse from title (similar to NFL)
-        const result = this.parseNFLTitle(title); // Use NFL parser as format is similar
-        if (result) {
-          awayAbbrev = result.away;
-          homeAbbrev = result.home;
-        }
+        // For college football, don't use NFL parser - it will incorrectly match NFL teams
+        // College football titles are too varied, so we skip title parsing for college sports
+        // and rely on ticker parsing only
+        // (Title parsing disabled for college sports to avoid NFL team mismatches)
       } else {
         const result = this.parseNBATitle(title);
         if (result) {
