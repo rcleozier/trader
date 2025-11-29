@@ -179,8 +179,8 @@ export class MispricingService {
 
   /**
    * "Mid-edge" strategy:
-   * - Uses MID_EDGE_THRESHOLD_PCT (lower than the main mispricing threshold)
-   * - Only considers outcomes where the sportsbook implied win probability is between 55% and 65%
+   * - Ignores any explicit edge threshold config
+   * - Only considers favorites where the sportsbook implied win probability is between 50% and 70%
    * This does NOT modify the primary mispricing strategy above.
    */
   findMidEdgeMispricings(
@@ -189,12 +189,9 @@ export class MispricingService {
   ): Mispricing[] {
     const midEdgeMispricings: Mispricing[] = [];
 
-    // Threshold expressed in percentage points, e.g. 0.03 -> 3
-    const thresholdPct = config.bot.midEdgeThresholdPct * 100;
-
-    // Mid probability band (in percentage, 55–65%)
-    const MIN_PROB_PCT = 55;
-    const MAX_PROB_PCT = 65;
+    // Favorites band (in percentage, 50–70%)
+    const MIN_PROB_PCT = 50;
+    const MAX_PROB_PCT = 70;
 
     for (const market of kalshiMarkets) {
       const odds = this.findMatchingGame(market, espnOdds);
@@ -221,10 +218,6 @@ export class MispricingService {
       const difference = Math.abs(kalshiProb - sportsbookProb);
       const differencePct = probabilityDifferencePct(kalshiProb, sportsbookProb);
       const isKalshiOvervaluing = kalshiProb > sportsbookProb;
-
-      if (differencePct < thresholdPct) {
-        continue;
-      }
 
       midEdgeMispricings.push({
         ticker: market.ticker,

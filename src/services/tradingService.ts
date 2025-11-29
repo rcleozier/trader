@@ -2,6 +2,7 @@ import { PortfolioApi, MarketsApi } from 'kalshi-typescript';
 import { config } from '../config';
 import { Mispricing } from '../types/markets';
 import { KalshiClient } from '../clients/kalshiClient';
+import { parseTickerToGame } from '../lib/ticker';
 
 // ANSI color codes for console output
 const colors = {
@@ -22,6 +23,12 @@ export class TradingService {
   private marketsApi: MarketsApi;
   private tradingConfig: TradingConfig;
   private kalshiClient?: KalshiClient;
+  /**
+   * In-memory set of games we've already traded in this process run.
+   * Prevents placing trades on both sides of the same game within a single run,
+   * even before the new positions appear in the API responses.
+   */
+  private tradedGameKeys: Set<string> = new Set();
 
   constructor(portfolioApi: PortfolioApi, marketsApi: MarketsApi, tradingConfig: TradingConfig, kalshiClient?: KalshiClient) {
     this.portfolioApi = portfolioApi;
@@ -31,11 +38,53 @@ export class TradingService {
   }
 
   /**
-   * Check if there's an existing position for a market ticker
+   * Normalize a ticker into a game key (order-independent "AWAY-HOME").
+   */
+  private getGameKeyFromTicker(ticker: string): string | null {
+    if (!ticker) return null;
+    const game = parseTickerToGame(ticker);
+    if (!game) return null;
+    // Sort teams alphabetically to make the key order-independent
+    const teams = [game.awayTeam, game.homeTeam].sort();
+    return `${teams[0]}-${teams[1]}`;
+  }
+
+  /**
+   * Determine if two tickers belong to the same underlying game (regardless of side).
+   */
+  private isSameGameTicker(tickerA: string, tickerB: string): boolean {
+    const keyA = this.getGameKeyFromTicker(tickerA);
+    const keyB = this.getGameKeyFromTicker(tickerB);
+    return !!keyA && !!keyB && keyA === keyB;
+  }
+
+  /**
+   * Find an existing position for this market *or the same game* (any side).
+   * Returns the position object if found, otherwise null.
+   */
+  private findExistingPositionForMarket(marketTicker: string, activePositions: any[]): any | null {
+    if (!activePositions || activePositions.length === 0) return null;
+
+    const position = activePositions.find(pos => {
+      if (!pos || !pos.ticker) return false;
+      const posCount = pos.position || 0;
+      if (posCount === 0) return false;
+
+      // Same exact market
+      if (pos.ticker === marketTicker) return true;
+
+      // Different ticker but same underlying game (e.g. opposite team)
+      return this.isSameGameTicker(pos.ticker, marketTicker);
+    });
+
+    return position || null;
+  }
+
+  /**
+   * Check if there's an existing position for a market ticker or the same game.
    */
   hasExistingPosition(marketTicker: string, activePositions: any[]): boolean {
-    const position = activePositions.find(pos => pos.ticker === marketTicker && pos.position && pos.position !== 0);
-    return !!position;
+    return !!this.findExistingPositionForMarket(marketTicker, activePositions);
   }
 
   /**
@@ -46,7 +95,9 @@ export class TradingService {
     // Check for any order on this market ticker with remaining count > 0
     const matchingOrders = activeOrders.filter(
       order => {
-        const tickerMatch = order.ticker === marketTicker;
+        const tickerMatch =
+          order.ticker === marketTicker ||
+          this.isSameGameTicker(order.ticker, marketTicker);
         const hasStatus = order.status === 'resting' || order.status === 'pending' || order.status === 'executed';
         const hasRemaining = order.remaining_count && order.remaining_count > 0;
         return tickerMatch && hasStatus && hasRemaining;
@@ -68,6 +119,13 @@ export class TradingService {
    * Place a buy order for a mispricing opportunity
    */
   async placeTrade(mispricing: Mispricing, marketTicker: string, activePositions: any[] = [], activeOrders: any[] = []): Promise<{ success: boolean; orderId?: string; error?: string }> {
+    // First, block if we've already traded this game in this run
+    const gameKey = this.getGameKeyFromTicker(marketTicker);
+    if (gameKey && this.tradedGameKeys.has(gameKey)) {
+      console.log(`[TRADING] Skipping trade - already traded game ${gameKey} earlier in this run (ticker: ${marketTicker})`);
+      return { success: false, error: 'Game already traded in this run' };
+    }
+
     // Refresh active orders right before checking to catch any recently placed orders
     let currentActiveOrders = activeOrders;
     if (this.kalshiClient) {
@@ -84,11 +142,12 @@ export class TradingService {
       }
     }
 
-    // Check if we already have a position on this market
-    if (this.hasExistingPosition(marketTicker, activePositions)) {
-      const existingPosition = activePositions.find(pos => pos.ticker === marketTicker && pos.position && pos.position !== 0);
-      const posCount = existingPosition?.position || 0;
-      console.log(`[TRADING] Skipping trade - already have position: ${posCount} contracts on ${marketTicker}`);
+    // Check if we already have a position on this market or the same game
+    const existingPosition = this.findExistingPositionForMarket(marketTicker, activePositions);
+    if (existingPosition) {
+      const posCount = existingPosition.position || 0;
+      const existingTicker = existingPosition.ticker || marketTicker;
+      console.log(`[TRADING] Skipping trade - already have position: ${posCount} contracts on ${existingTicker} (same game as ${marketTicker})`);
       return { success: false, error: 'Existing position found' };
     }
 
@@ -237,6 +296,10 @@ export class TradingService {
       if (response.data?.order) {
         const orderId = response.data.order.order_id;
         console.log(`  ${colors.green}✅ Order placed successfully: ${orderId}${colors.reset}`);
+        // Mark this game as traded for the rest of this process run
+        if (gameKey) {
+          this.tradedGameKeys.add(gameKey);
+        }
         return { success: true, orderId };
       } else {
         console.log(`  ${colors.red}❌ No order returned from API${colors.reset}`);
