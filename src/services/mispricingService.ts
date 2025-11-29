@@ -113,6 +113,7 @@ export class MispricingService {
         
         if (diff >= config.bot.mispricingThresholdPct * 100) {
           mispricings.push({
+            ticker: gameData.kalshi.home.ticker,
             game: gameData.espn.game,
             side: 'home',
             kalshiPrice: gameData.kalshi.home.price,
@@ -134,6 +135,7 @@ export class MispricingService {
         
         if (diff >= config.bot.mispricingThresholdPct * 100) {
           mispricings.push({
+            ticker: gameData.kalshi.away.ticker,
             game: gameData.espn.game,
             side: 'away',
             kalshiPrice: gameData.kalshi.away.price,
@@ -173,6 +175,72 @@ export class MispricingService {
     }
 
     return null;
+  }
+
+  /**
+   * "Mid-edge" strategy:
+   * - Uses MID_EDGE_THRESHOLD_PCT (lower than the main mispricing threshold)
+   * - Only considers outcomes where the sportsbook implied win probability is between 55% and 65%
+   * This does NOT modify the primary mispricing strategy above.
+   */
+  findMidEdgeMispricings(
+    kalshiMarkets: Market[],
+    espnOdds: SportsbookOdds[]
+  ): Mispricing[] {
+    const midEdgeMispricings: Mispricing[] = [];
+
+    // Threshold expressed in percentage points, e.g. 0.03 -> 3
+    const thresholdPct = config.bot.midEdgeThresholdPct * 100;
+
+    // Mid probability band (in percentage, 55–65%)
+    const MIN_PROB_PCT = 55;
+    const MAX_PROB_PCT = 65;
+
+    for (const market of kalshiMarkets) {
+      const odds = this.findMatchingGame(market, espnOdds);
+      if (!odds) continue;
+
+      const isHome = market.side === 'home';
+      const sportsbookProb = isHome
+        ? odds.homeImpliedProbability
+        : odds.awayImpliedProbability;
+      const sportsbookOddsValue = isHome
+        ? odds.homeOdds
+        : odds.awayOdds;
+
+      if (sportsbookProb === undefined || sportsbookOddsValue === undefined) {
+        continue;
+      }
+
+      const probPct = sportsbookProb * 100;
+      if (probPct < MIN_PROB_PCT || probPct > MAX_PROB_PCT) {
+        continue;
+      }
+
+      const kalshiProb = market.impliedProbability;
+      const difference = Math.abs(kalshiProb - sportsbookProb);
+      const differencePct = probabilityDifferencePct(kalshiProb, sportsbookProb);
+      const isKalshiOvervaluing = kalshiProb > sportsbookProb;
+
+      if (differencePct < thresholdPct) {
+        continue;
+      }
+
+      midEdgeMispricings.push({
+        ticker: market.ticker,
+        game: market.game,
+        side: market.side,
+        kalshiPrice: market.price,
+        kalshiImpliedProbability: kalshiProb,
+        sportsbookOdds: sportsbookOddsValue,
+        sportsbookImpliedProbability: sportsbookProb,
+        difference,
+        differencePct,
+        isKalshiOvervaluing,
+      });
+    }
+
+    return midEdgeMispricings;
   }
 
   /**
@@ -247,6 +315,7 @@ export class MispricingService {
 
 
     return {
+      ticker: market.ticker,
       game: market.game,
       side,
       kalshiPrice: market.price,

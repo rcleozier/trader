@@ -57,6 +57,11 @@ interface Config {
   };
   bot: {
     mispricingThresholdPct: number;
+    /**
+     * Threshold (as a fraction, e.g. 0.03 = 3 percentage points)
+     * used by the "mid_edge" strategy.
+     */
+    midEdgeThresholdPct: number;
     runScheduleCron?: string;
   };
   trading: {
@@ -141,6 +146,7 @@ export const config: Config = {
   } : undefined,
   bot: {
     mispricingThresholdPct: parseFloat(getOptionalEnv('MISPRICING_THRESHOLD_PCT', '0.05') || '0.05'),
+    midEdgeThresholdPct: parseFloat(getOptionalEnv('MID_EDGE_THRESHOLD_PCT', '0.03') || '0.03'),
     runScheduleCron: getOptionalEnv('RUN_SCHEDULE_CRON'),
   },
   trading: {

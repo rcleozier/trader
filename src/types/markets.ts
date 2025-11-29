@@ -29,6 +29,11 @@ export interface SportsbookOdds {
 export interface Mispricing {
   game: Game;
   side: 'home' | 'away';
+  /**
+   * Optional Kalshi market ticker for this mispricing (if available).
+   * Useful for mapping back to a specific market when placing trades.
+   */
+  ticker?: string;
   kalshiPrice: number;
   kalshiImpliedProbability: number;
   sportsbookOdds: number;

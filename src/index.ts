@@ -51,6 +51,51 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
     const mispricingService = new MispricingService();
     const { mispricings, comparisons } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
     console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${comparisons.length}${colors.reset} games with comparison data`);
+
+    // Mid-edge strategy (second, independent screener)
+    const midEdgeMispricings = mispricingService.findMidEdgeMispricings(kalshiMarkets, espnOdds);
+    if (midEdgeMispricings.length > 0) {
+      console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${midEdgeMispricings.length}${colors.reset} mid-edge opportunity/ies (55-65% win prob, ≥ ${config.bot.midEdgeThresholdPct * 100} pts edge)`);
+    }
+
+    // Build a set of tickers already covered by the primary mispricing strategy,
+    // so mid_edge doesn't try to re-trade the same market.
+    const primaryMispricingTickers = new Set<string>();
+    for (const m of mispricings) {
+      if (m.ticker) {
+        primaryMispricingTickers.add(m.ticker);
+      }
+    }
+
+    // Mid-edge trading: optionally place trades using the mid_edge strategy.
+    // This is fully independent of (and in addition to) the primary mispricing strategy.
+    if (tradingService && midEdgeMispricings.length > 0) {
+      for (const mid of midEdgeMispricings) {
+        const ticker = mid.ticker;
+        if (!ticker) continue;
+
+        // Skip markets already handled by the primary strategy to avoid double-trading.
+        if (primaryMispricingTickers.has(ticker)) {
+          continue;
+        }
+
+        const shouldTrade = await tradingService.shouldPlaceTrade(balance || null);
+        if (!shouldTrade) {
+          // If we shouldn't trade (e.g. balance too low), stop evaluating further mid-edge trades.
+          break;
+        }
+
+        console.log(`\n${sportEmoji} ${colors.bright}${colors.cyan}[MID_EDGE]${colors.reset} Considering trade: ${mid.game.awayTeam} @ ${mid.game.homeTeam} (${mid.side.toUpperCase()})`);
+        console.log(`  Kalshi: ${(mid.kalshiImpliedProbability * 100).toFixed(2)}%  |  ESPN: ${(mid.sportsbookImpliedProbability * 100).toFixed(2)}%  |  Edge: ${mid.differencePct.toFixed(2)} pts`);
+
+        const tradeResult = await tradingService.placeTrade(mid, ticker, activePositions, activeOrders);
+        if (tradeResult.success) {
+          console.log(`  ${colors.green}✅ [MID_EDGE] Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
+        } else if (tradeResult.error !== 'Existing position found' && tradeResult.error !== 'Pending order found') {
+          console.log(`  ${colors.red}❌ [MID_EDGE] Trade failed: ${tradeResult.error}${colors.reset}`);
+        }
+      }
+    }
     
     // Create a map of positions by ticker - store array since there can be both YES and NO positions
     const positionsByTicker = new Map<string, any[]>();
