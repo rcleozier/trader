@@ -1,15 +1,16 @@
 export function parseTicker(ticker: string): { sport: string; teams: string; side: string } | null {
   // Format: KXNBAGAME-25NOV26MINOKC-OKC or KXNFLGAME-25NOV30LACAR-LA or KXNHLGAME-25NOV30TORMTL-TOR
-  // or KXNCAABGAME-25NOV30DUKEUNC-DUKE or KXNCAAGAME-25NOV30ALABAMA-AUB
-  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL|KXNCAAB|KXNCAAG)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
+  // or KXNCAABGAME-25NOV30DUKEUNC-DUKE or KXNCAAFGAME-25NOV30ALABAMA-AUB
+  // or KXNCAAMBGAME-25NOV30DUKEUNC-DUKE (alternate college basketball prefix)
+  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL|KXNCAAB|KXNCAAMBG|KXNCAAF)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
   if (!match) return null;
   
   const sportPrefix = match[1];
   const sport = sportPrefix === 'KXNBA' ? 'NBA' : 
                 sportPrefix === 'KXNFL' ? 'NFL' : 
                 sportPrefix === 'KXNHL' ? 'NHL' :
-                sportPrefix === 'KXNCAAB' ? 'NCAAB' :
-                sportPrefix === 'KXNCAAG' ? 'NCAAF' : '';
+                (sportPrefix === 'KXNCAAB' || sportPrefix === 'KXNCAAMBG') ? 'NCAAB' :
+                sportPrefix === 'KXNCAAF' ? 'NCAAF' : '';
   const combined = match[3];
   const side = match[4];
   
@@ -19,17 +20,18 @@ export function parseTicker(ticker: string): { sport: string; teams: string; sid
 
 export function parseTickerToGame(ticker: string): { awayTeam: string; homeTeam: string; teamSide: string; sport: string } | null {
   // Format: KXNFLGAME-25NOV30LACAR-LA or KXNHLGAME-25NOV30TORMTL-TOR
-  // or KXNCAABGAME-25NOV30DUKEUNC-DUKE or KXNCAAGAME-25NOV30ALABAMA-AUB
+  // or KXNCAABGAME-25NOV30DUKEUNC-DUKE or KXNCAAFGAME-25NOV30ALABAMA-AUB
+  // or KXNCAAMBGAME-25NOV30DUKEUNC-DUKE (alternate college basketball prefix)
   // combined = LACAR (LAR + CAR), side = LA (which is LAR)
-  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL|KXNCAAB|KXNCAAG)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
+  const match = ticker.match(/^(KXNBA|KXNFL|KXNHL|KXNCAAB|KXNCAAMBG|KXNCAAF)GAME-(\d+)([A-Z]+)-([A-Z]+)$/);
   if (!match) return null;
   
   const sportPrefix = match[1];
   const sport: 'NBA' | 'NFL' | 'NHL' | 'NCAAB' | 'NCAAF' = sportPrefix === 'KXNBA' ? 'NBA' : 
                 sportPrefix === 'KXNFL' ? 'NFL' : 
                 sportPrefix === 'KXNHL' ? 'NHL' :
-                sportPrefix === 'KXNCAAB' ? 'NCAAB' :
-                sportPrefix === 'KXNCAAG' ? 'NCAAF' : 'NBA'; // Default to NBA if unknown
+                (sportPrefix === 'KXNCAAB' || sportPrefix === 'KXNCAAMBG') ? 'NCAAB' :
+                sportPrefix === 'KXNCAAF' ? 'NCAAF' : 'NBA'; // Default to NBA if unknown
   const combined = match[3];
   const sideAbbrev = match[4];
   

@@ -38,13 +38,24 @@ export class TradingService {
   }
 
   /**
-   * Normalize a ticker into a game key (order-independent "AWAY-HOME").
+   * Normalize a ticker into a game key.
+   * Primary method: use the core part of the Kalshi ticker (date + teams),
+   * which is shared by both sides of the same game regardless of prefix/sport.
+   * Fallback: derive from parsed away/home team names.
    */
   private getGameKeyFromTicker(ticker: string): string | null {
     if (!ticker) return null;
+
+    // Example: KXNFLGAME-25NOV30ARITB-TB or KXNCAAFGAME-25NOV29VANTENN-TENN
+    // Core "game id" is the middle segment (25NOV30ARITB / 25NOV29VANTENN)
+    const coreMatch = ticker.match(/^[A-Z]+GAME-([A-Z0-9]+)-[A-Z0-9]+$/);
+    if (coreMatch) {
+      return coreMatch[1];
+    }
+
+    // Fallback: use parsed teams if regex didn't match
     const game = parseTickerToGame(ticker);
     if (!game) return null;
-    // Sort teams alphabetically to make the key order-independent
     const teams = [game.awayTeam, game.homeTeam].sort();
     return `${teams[0]}-${teams[1]}`;
   }
