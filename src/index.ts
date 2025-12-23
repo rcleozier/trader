@@ -48,55 +48,10 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
     const espnOdds = await espnClient.fetchGamesWithOdds(sportConfig.espnPath);
     console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${espnOdds.length}${colors.reset} ESPN games with odds`);
 
-    // Find mispricings and comparisons
+    // Find mispricings and comparisons (primary strategy only)
     const mispricingService = new MispricingService();
     const { mispricings, comparisons } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
     console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${comparisons.length}${colors.reset} games with comparison data`);
-
-    // Mid-edge strategy (second, independent screener)
-    const midEdgeMispricings = mispricingService.findMidEdgeMispricings(kalshiMarkets, espnOdds);
-    if (midEdgeMispricings.length > 0) {
-      console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${midEdgeMispricings.length}${colors.reset} mid-edge opportunity/ies (favorites in 50-70% win prob band)`);
-    }
-
-    // Build a set of tickers already covered by the primary mispricing strategy,
-    // so mid_edge doesn't try to re-trade the same market.
-    const primaryMispricingTickers = new Set<string>();
-    for (const m of mispricings) {
-      if (m.ticker) {
-        primaryMispricingTickers.add(m.ticker);
-      }
-    }
-
-    // Mid-edge trading: optionally place trades using the mid_edge strategy.
-    // This is fully independent of (and in addition to) the primary mispricing strategy.
-    if (tradingService && midEdgeMispricings.length > 0) {
-      for (const mid of midEdgeMispricings) {
-        const ticker = mid.ticker;
-        if (!ticker) continue;
-
-        // Skip markets already handled by the primary strategy to avoid double-trading.
-        if (primaryMispricingTickers.has(ticker)) {
-          continue;
-        }
-
-        const shouldTrade = await tradingService.shouldPlaceTrade(balance || null);
-        if (!shouldTrade) {
-          // If we shouldn't trade (e.g. balance too low), stop evaluating further mid-edge trades.
-          break;
-        }
-
-        console.log(`\n${sportEmoji} ${colors.bright}${colors.cyan}[MID_EDGE]${colors.reset} Considering trade: ${mid.game.awayTeam} @ ${mid.game.homeTeam} (${mid.side.toUpperCase()})`);
-        console.log(`  Kalshi: ${(mid.kalshiImpliedProbability * 100).toFixed(2)}%  |  ESPN: ${(mid.sportsbookImpliedProbability * 100).toFixed(2)}%  |  Edge: ${mid.differencePct.toFixed(2)} pts`);
-
-        const tradeResult = await tradingService.placeTrade(mid, ticker, activePositions, activeOrders);
-        if (tradeResult.success) {
-          console.log(`  ${colors.green}✅ [MID_EDGE] Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
-        } else if (tradeResult.error !== 'Existing position found' && tradeResult.error !== 'Pending order found') {
-          console.log(`  ${colors.red}❌ [MID_EDGE] Trade failed: ${tradeResult.error}${colors.reset}`);
-        }
-      }
-    }
     
     // Create a map of positions by ticker - store array since there can be both YES and NO positions
     const positionsByTicker = new Map<string, any[]>();
@@ -476,7 +431,8 @@ async function displayAccountInfo(): Promise<void> {
   console.log('');
 }
 
-async function runMispricingCheck(): Promise<void> {
+// Exported so it can be re-used by other entrypoints (e.g. Vercel cron)
+export async function runMispricingCheck(): Promise<void> {
   // Display account info first and get active positions and orders
   const kalshiClient = new KalshiClient();
   const balance = await kalshiClient.getBalance();
@@ -515,7 +471,7 @@ async function runMispricingCheck(): Promise<void> {
   await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance);
 }
 
-// Main execution
+// Main execution for CLI usage only
 async function main(): Promise<void> {
   // Run once immediately
   await runMispricingCheck();
@@ -530,16 +486,20 @@ async function main(): Promise<void> {
   }
 }
 
-// Handle errors and graceful shutdown
-process.on('unhandledRejection', (error: Error) => {
-  process.exit(1);
-});
+// Only attach process handlers and start the bot when this file
+// is executed directly (e.g. "node dist/index.js"), not when imported.
+if (require.main === module) {
+  // Handle errors and graceful shutdown
+  process.on('unhandledRejection', (error: Error) => {
+    process.exit(1);
+  });
 
-process.on('SIGINT', () => {
-  process.exit(0);
-});
+  process.on('SIGINT', () => {
+    process.exit(0);
+  });
 
-// Start the bot
-main().catch((error) => {
-  process.exit(1);
-});
+  // Start the bot
+  main().catch((error) => {
+    process.exit(1);
+  });
+}

@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "api/mispricing.ts": {
+      "runtime": "nodejs22.x"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/mispricing",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}
+
+

@@ -235,16 +235,13 @@ export class TradingService {
       console.log(`  Warning: Could not fetch ask price, using cached price: ${buyPrice.toFixed(1)} cents (${error.message})`);
     }
     
-    // Calculate bet size in dollars based on MAX_BET_SIZE
-    // Scale with mispricing size: larger mispricings get larger bets
+    // Calculate bet size in dollars based on MAX_BET_SIZE.
+    // If MAX_BET_SIZE is set, always bet that full dollar amount on each qualifying trade.
+    // Otherwise, default to $1 per percentage point of mispricing.
     let betSizeDollars = 0;
     if (this.tradingConfig.maxBetSize) {
-      // Use a percentage of max bet size based on mispricing size
-      const mispricingSize = mispricing.differencePct;
-      const betPercentage = Math.min(mispricingSize / 10, 1); // Scale with mispricing, max 100%
-      betSizeDollars = this.tradingConfig.maxBetSize * betPercentage;
+      betSizeDollars = this.tradingConfig.maxBetSize;
     } else {
-      // Default: $1 per percentage point of mispricing if MAX_BET_SIZE not set
       betSizeDollars = mispricing.differencePct;
     }
 
