@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trader Bot</title>
+    <title>Status</title>
     <style>
       body {
         margin: 0;
@@ -21,21 +21,27 @@
         background: transparent;
         text-align: center;
       }
-      h1 {
-        margin: 0 0 4px;
-        font-size: 22px;
+      .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #22c55e;
+        margin-right: 8px;
       }
-      p {
+      .status {
         margin: 0;
         font-size: 14px;
-        color: #6b7280;
+        color: #9ca3af;
       }
     </style>
   </head>
   <body>
     <main class="card">
-      <h1>Trader Bot</h1>
-      <p>Running as a background job on Vercel.</p>
+      <p class="status">
+        <span class="dot"></span>
+        Status: OK
+      </p>
     </main>
   </body>
   </html>

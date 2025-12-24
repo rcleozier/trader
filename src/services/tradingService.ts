@@ -23,6 +23,8 @@ export interface TradingConfig {
   maxPerStrategyArbitrage?: number;
   maxPerStrategySpread?: number;
   maxPerStrategyMispricing?: number;
+   maxHoldTimeHours?: number;
+   maxOpenSpreadPositions?: number;
 }
 
 export class TradingService {
@@ -76,6 +78,27 @@ export class TradingService {
   private registerStrategySpend(strategy: StrategyName, amountDollars: number): void {
     if (!Number.isFinite(amountDollars) || amountDollars <= 0) return;
     this.strategyCapitalUsed[strategy] += amountDollars;
+  }
+
+  private isSpreadMarketTicker(ticker: string): boolean {
+    if (!ticker) return false;
+    const upper = ticker.toUpperCase();
+    return (
+      upper.startsWith('KXCBAGAME') ||
+      upper.startsWith('KXNBLGAME') ||
+      upper.startsWith('KXEUROLEAGUEGAME')
+    );
+  }
+
+  getOpenSpreadPositionsCount(activePositions: any[]): number {
+    if (!activePositions || activePositions.length === 0) return 0;
+    return activePositions.filter(
+      (p) =>
+        p &&
+        p.ticker &&
+        this.isSpreadMarketTicker(p.ticker) &&
+        (p.position || 0) !== 0
+    ).length;
   }
 
   /**
@@ -356,7 +379,7 @@ export class TradingService {
         action: 'buy',
         count: finalContractCount, // Number of contracts
         type: 'limit',
-        client_order_id: `mispricing-${Date.now()}`, // Unique client order ID
+        client_order_id: `${strategy}-entry-${Date.now()}`, // Unique client order ID
       };
 
       // Set price based on side
@@ -376,6 +399,39 @@ export class TradingService {
         // Mark this game as traded for the rest of this process run
         if (gameKey) {
           this.tradedGameKeys.add(gameKey);
+        }
+        // For spread-farming entries, immediately place a take-profit GTC limit order
+        if (strategy === 'spread') {
+          const entryPrice = Math.floor(buyPrice);
+          const tpRaw = Math.min(entryPrice + 4, Math.round(entryPrice * 1.3));
+          // Clamp to a valid Kalshi price range
+          const targetPrice = Math.max(1, Math.min(99, tpRaw));
+
+          const tpOrder: any = {
+            ticker: marketTicker,
+            side: side,
+            action: 'sell',
+            count: finalContractCount,
+            type: 'limit',
+            client_order_id: `spread-tp-${Date.now()}`,
+          };
+
+          if (side === 'yes') {
+            tpOrder.yes_price = targetPrice;
+          } else {
+            tpOrder.no_price = targetPrice;
+          }
+
+          try {
+            console.log(
+              `  Placing spread take-profit order: SELL ${side.toUpperCase()} ${finalContractCount} @ ${targetPrice} cents`
+            );
+            await this.portfolioApi.createOrder(tpOrder);
+          } catch (tpError: any) {
+            console.log(
+              `  ${colors.yellow}Warning: Failed to place spread take-profit order: ${tpError.message}${colors.reset}`
+            );
+          }
         }
         // Track capital spent for this strategy
         this.registerStrategySpend(strategy, parseFloat(actualBetSizeDollars));
@@ -408,6 +464,122 @@ export class TradingService {
     }
 
     return true;
+  }
+
+  /**
+   * Enforce maximum hold time on spread-farming positions.
+   * If a spread position has been open longer than maxHoldTimeHours,
+   * place a best-effort exit order at the current best price.
+   */
+  async enforceSpreadMaxHoldTime(
+    activePositions: any[],
+    activeOrders: any[] = []
+  ): Promise<void> {
+    const hours = this.tradingConfig.maxHoldTimeHours;
+    if (!hours || hours <= 0) return;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const maxAgeSec = hours * 3600;
+
+    for (const pos of activePositions || []) {
+      if (!pos || !pos.ticker || (pos.position || 0) === 0) continue;
+      if (!this.isSpreadMarketTicker(pos.ticker)) continue;
+
+      // Best-effort: try multiple possible timestamp fields
+      const openedTs =
+        (typeof pos.open_ts === 'number' && pos.open_ts) ||
+        (typeof pos.open_time === 'number' && pos.open_time) ||
+        (typeof pos.ts === 'number' && pos.ts) ||
+        undefined;
+
+      if (!openedTs) continue;
+
+      const ageSec = nowSec - openedTs;
+      if (ageSec < maxAgeSec) continue;
+
+      const openCount = pos.position || 0;
+      if (openCount <= 0) continue;
+
+      // Calculate remaining quantity not already covered by resting sell orders
+      const restingSells = (activeOrders || []).filter(
+        (o: any) =>
+          o &&
+          o.ticker === pos.ticker &&
+          o.action === 'sell' &&
+          (o.status === 'resting' || o.status === 'pending') &&
+          (o.remaining_count || 0) > 0
+      );
+      const alreadyOffered = restingSells.reduce(
+        (sum: number, o: any) => sum + (o.remaining_count || 0),
+        0
+      );
+      const qtyToExit = openCount - alreadyOffered;
+      if (qtyToExit <= 0) continue;
+
+      try {
+        const marketResponse = await this.marketsApi.getMarkets(
+          1,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          'open',
+          pos.ticker
+        );
+        const market = marketResponse.data?.markets?.[0];
+        if (!market) continue;
+
+        const isYes = pos.market_result === 'yes';
+        let exitPrice: number | null = null;
+
+        if (isYes) {
+          exitPrice =
+            (market.yes_bid !== undefined && market.yes_bid !== null && market.yes_bid) ||
+            (market.last_price !== undefined && market.last_price !== null && market.last_price) ||
+            null;
+        } else {
+          // NO position: use no_bid if available, otherwise derive from yes_ask/bid
+          if (market.no_bid !== undefined && market.no_bid !== null) {
+            exitPrice = market.no_bid;
+          } else if (market.yes_ask !== undefined && market.yes_ask !== null) {
+            exitPrice = 100 - market.yes_ask;
+          } else if (market.yes_bid !== undefined && market.yes_bid !== null) {
+            exitPrice = 100 - market.yes_bid;
+          } else if (market.last_price !== undefined && market.last_price !== null) {
+            exitPrice = 100 - market.last_price;
+          }
+        }
+
+        if (exitPrice === null) continue;
+
+        const exitOrder: any = {
+          ticker: pos.ticker,
+          side: isYes ? 'yes' : 'no',
+          action: 'sell',
+          count: qtyToExit,
+          type: 'limit',
+          client_order_id: `spread-ttl-exit-${Date.now()}`,
+        };
+
+        if (isYes) {
+          exitOrder.yes_price = Math.max(1, Math.min(99, Math.floor(exitPrice)));
+        } else {
+          exitOrder.no_price = Math.max(1, Math.min(99, Math.floor(exitPrice)));
+        }
+
+        console.log(
+          `[TRADING] Max hold time reached for spread position ${pos.ticker} (age=${(
+            ageSec / 3600
+          ).toFixed(2)}h). Placing time-based exit for ${qtyToExit} contracts.`
+        );
+        await this.portfolioApi.createOrder(exitOrder);
+      } catch (error: any) {
+        console.log(
+          `[TRADING] Warning: Failed to place time-based exit for ${pos.ticker}: ${error.message}`
+        );
+      }
+    }
   }
 
   /**

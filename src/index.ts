@@ -403,7 +403,7 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
  */
 async function runSpreadFarmingForSeries(
   seriesTicker: string,
-  sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' | 'nbl',
+  sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' | 'nbl' | 'euro',
   label: string,
   emoji: string,
   activePositions: any[],
@@ -419,6 +419,17 @@ async function runSpreadFarmingForSeries(
     console.log(
       `\n${emoji} ${colors.bright}${colors.cyan}${label}${colors.reset}: Found ${colors.yellow}${markets.length}${colors.reset} Kalshi markets (spread farming only)`
     );
+
+    // Enforce global cap on open spread-farming positions
+    const maxOpen = config.trading.maxOpenSpreadPositions;
+    const openCount = tradingService.getOpenSpreadPositionsCount(activePositions);
+    if (maxOpen !== undefined && openCount >= maxOpen) {
+      console.log(
+        `${emoji} ${colors.bright}${colors.cyan}${label}${colors.reset}: ` +
+          `${colors.gray}Spread-farming paused (open positions ${openCount}/${maxOpen})${colors.reset}`
+      );
+      return;
+    }
 
     const spreadCandidates = tradingService.findSpreadExtremes(markets);
     if (spreadCandidates.length === 0) {
@@ -647,6 +658,11 @@ export async function runMispricingCheck(): Promise<void> {
       console.log(`\n${colors.bright}${colors.gray}DRY RUN MODE - No actual trades will be placed${colors.reset}`);
     }
   }
+
+  // Before opening any new positions, enforce spread-farming max hold time exits
+  if (tradingService) {
+    await tradingService.enforceSpreadMaxHoldTime(activePositions, activeOrders);
+  }
   
   // Run checks for all sports, passing active positions, orders, and trading service
   await runMispricingCheckForSport('nba', activePositions, activeOrders, tradingService, balance);
@@ -671,6 +687,17 @@ export async function runMispricingCheck(): Promise<void> {
     'KXNBLGAME',
     'nbl',
     'NBL Basketball',
+    '🏀',
+    activePositions,
+    activeOrders,
+    tradingService,
+    balance
+  );
+
+  await runSpreadFarmingForSeries(
+    'KXEUROLEAGUEGAME',
+    'euro',
+    'Euroleague Basketball',
     '🏀',
     activePositions,
     activeOrders,

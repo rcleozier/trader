@@ -68,6 +68,8 @@ interface Config {
     maxPerStrategyArbitrage?: number;
     maxPerStrategySpread?: number;
     maxPerStrategyMispricing?: number;
+    maxHoldTimeHours?: number;
+    maxOpenSpreadPositions?: number;
   };
 }
 
@@ -162,6 +164,12 @@ export const config: Config = {
       : undefined,
     maxPerStrategyMispricing: getOptionalEnv('MAX_PER_STRATEGY_MISPRICING')
       ? parseFloat(getOptionalEnv('MAX_PER_STRATEGY_MISPRICING')!)
+      : undefined,
+    maxHoldTimeHours: getOptionalEnv('MAX_HOLD_TIME_HOURS')
+      ? parseFloat(getOptionalEnv('MAX_HOLD_TIME_HOURS')!)
+      : 24,
+    maxOpenSpreadPositions: getOptionalEnv('MAX_OPEN_SPREAD_POSITIONS')
+      ? parseInt(getOptionalEnv('MAX_OPEN_SPREAD_POSITIONS')!, 10)
       : undefined,
   },
 };
