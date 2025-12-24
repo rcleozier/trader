@@ -1,10 +1,5 @@
 {
   "version": 2,
-  "functions": {
-    "api/mispricing.ts": {
-      "runtime": "nodejs20.x"
-    }
-  },
   "crons": [
     {
       "path": "/api/mispricing",
