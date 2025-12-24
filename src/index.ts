@@ -666,6 +666,17 @@ export async function runMispricingCheck(): Promise<void> {
     tradingService,
     balance
   );
+
+  await runSpreadFarmingForSeries(
+    'KXNBLGAME',
+    'nbl',
+    'NBL Basketball',
+    '🏀',
+    activePositions,
+    activeOrders,
+    tradingService,
+    balance
+  );
 }
 
 // Main execution for CLI usage only

@@ -36,11 +36,11 @@ export class KalshiClient {
    * Fetch markets from Kalshi for a specific series
    * Supported sports:
    * - nba, nfl, nhl, ncaab, ncaaf (existing)
-   * - cba (Chinese basketball, spread-farming only, no external odds)
+   * - cba, nbl (alt basketball, spread-farming only, no external odds)
    */
   async fetchMarkets(
     seriesTicker: string,
-    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' = 'nba'
+    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' | 'nbl' = 'nba'
   ): Promise<Market[]> {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
@@ -82,7 +82,7 @@ export class KalshiClient {
       }
       
       // If no markets found with 'open' status, try without status filter for college/alt sports
-      if (allMarkets.length === 0 && (sport === 'ncaaf' || sport === 'ncaab' || sport === 'cba')) {
+      if (allMarkets.length === 0 && (sport === 'ncaaf' || sport === 'ncaab' || sport === 'cba' || sport === 'nbl')) {
         for (const tickerToTry of uniqueSeriesTickers) {
           try {
             const marketsResponse = await this.marketsApi.getMarkets(
@@ -118,7 +118,7 @@ export class KalshiClient {
         
         // For college/alt sports, be more lenient with filtering
         // Team names can be longer and formats vary more
-        const isCollegeSport = sport === 'ncaaf' || sport === 'ncaab' || sport === 'cba';
+        const isCollegeSport = sport === 'ncaaf' || sport === 'ncaab' || sport === 'cba' || sport === 'nbl';
         
         // Look for game indicators first: @ symbol, team names, vs, "Winner?", "at"
         const hasGameFormat = title.includes('@') || 
@@ -129,7 +129,7 @@ export class KalshiClient {
                              eventTicker.includes('@');
         
         // For college/alt sports, also check if event ticker has team-like patterns
-        // These tickers often have longer abbreviations (e.g., KXNCAAFGAME-..., KXNCAAMBGAME-..., KXCBAGAME-...)
+        // These tickers often have longer abbreviations (e.g., KXNCAAFGAME-..., KXNCAAMBGAME-..., KXCBAGAME-..., KXNBLGAME-...)
         const hasCollegeGamePattern = isCollegeSport && eventTicker && eventTicker.length > 15;
         
         // If it has game format or college pattern, it's likely a game market
@@ -157,7 +157,9 @@ export class KalshiClient {
               ? 'KXNCAAFGAME'
               : sport === 'ncaab'
               ? 'KXNCAAMBGAME'
-              : 'KXCBAGAME';
+              : sport === 'cba'
+              ? 'KXCBAGAME'
+              : 'KXNBLGAME';
           if (eventTicker.toUpperCase().startsWith(seriesPrefix)) {
             // Likely a game market, include it and let parsing decide
             return true;
@@ -190,7 +192,7 @@ export class KalshiClient {
    */
   private parseMarkets(
     rawMarkets: any[],
-    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' = 'nba'
+    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' | 'nbl' = 'nba'
   ): Market[] {
     const markets: Market[] = [];
     let skippedGameInfo = 0;
@@ -247,7 +249,7 @@ export class KalshiClient {
    */
   private extractGameInfo(
     raw: any,
-    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' = 'nba'
+    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' | 'nbl' = 'nba'
   ): Game | null {
     const title = (raw.title || raw.name || '').toString();
     const ticker = (raw.ticker || '').toString();
@@ -292,8 +294,8 @@ export class KalshiClient {
         ? nflTeamAbbrevMap
         : sport === 'nhl'
         ? nhlTeamAbbrevMap
-        : sport === 'ncaab' || sport === 'ncaaf' || sport === 'cba'
-        ? {} // Empty map for college/CBA - will parse from ticker
+        : sport === 'ncaab' || sport === 'ncaaf' || sport === 'cba' || sport === 'nbl'
+        ? {} // Empty map for college/CBA/NBL - will parse from ticker
         : nbaTeamAbbrevMap;
     const seriesPrefix =
       sport === 'nfl'
@@ -306,6 +308,8 @@ export class KalshiClient {
         ? 'KXNCAAFGAME'
         : sport === 'cba'
         ? 'KXCBAGAME'
+        : sport === 'nbl'
+        ? 'KXNBLGAME'
         : 'KXNBAGAME';
     
     // Try to extract from event ticker first (most reliable)
