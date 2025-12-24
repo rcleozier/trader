@@ -34,8 +34,14 @@ export class KalshiClient {
 
   /**
    * Fetch markets from Kalshi for a specific series
+   * Supported sports:
+   * - nba, nfl, nhl, ncaab, ncaaf (existing)
+   * - cba (Chinese basketball, spread-farming only, no external odds)
    */
-  async fetchMarkets(seriesTicker: string, sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Promise<Market[]> {
+  async fetchMarkets(
+    seriesTicker: string,
+    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' = 'nba'
+  ): Promise<Market[]> {
     try {
       const currentTime = Math.floor(Date.now() / 1000);
       
@@ -75,8 +81,8 @@ export class KalshiClient {
         }
       }
       
-      // If no markets found with 'open' status, try without status filter for college sports
-      if (allMarkets.length === 0 && (sport === 'ncaaf' || sport === 'ncaab')) {
+      // If no markets found with 'open' status, try without status filter for college/alt sports
+      if (allMarkets.length === 0 && (sport === 'ncaaf' || sport === 'ncaab' || sport === 'cba')) {
         for (const tickerToTry of uniqueSeriesTickers) {
           try {
             const marketsResponse = await this.marketsApi.getMarkets(
@@ -110,9 +116,9 @@ export class KalshiClient {
         const titleUpper = title.toUpperCase();
         const eventTicker = (m.event_ticker || '').toString().toUpperCase();
         
-        // For college sports, be more lenient with filtering
-        // College team names can be longer and formats vary more
-        const isCollegeSport = sport === 'ncaaf' || sport === 'ncaab';
+        // For college/alt sports, be more lenient with filtering
+        // Team names can be longer and formats vary more
+        const isCollegeSport = sport === 'ncaaf' || sport === 'ncaab' || sport === 'cba';
         
         // Look for game indicators first: @ symbol, team names, vs, "Winner?", "at"
         const hasGameFormat = title.includes('@') || 
@@ -122,8 +128,8 @@ export class KalshiClient {
                              titleUpper.includes(' AT ') || // Common in college sports
                              eventTicker.includes('@');
         
-        // For college sports, also check if event ticker has team-like patterns
-        // College tickers often have longer abbreviations (e.g., KXNCAAFGAME-25NOV30ALABAMA-AUB or KXNCAAMBGAME-25NOV27SBONECU-SBON)
+        // For college/alt sports, also check if event ticker has team-like patterns
+        // These tickers often have longer abbreviations (e.g., KXNCAAFGAME-..., KXNCAAMBGAME-..., KXCBAGAME-...)
         const hasCollegeGamePattern = isCollegeSport && eventTicker && eventTicker.length > 15;
         
         // If it has game format or college pattern, it's likely a game market
@@ -143,10 +149,15 @@ export class KalshiClient {
           return !isProposition;
         }
         
-        // For college sports, be more lenient - if it's from the right series, include it
+        // For college/alt sports, be more lenient - if it's from the right series, include it
         // (we'll let parsing determine if it's valid)
         if (isCollegeSport && eventTicker) {
-          const seriesPrefix = sport === 'ncaaf' ? 'KXNCAAFGAME' : 'KXNCAAMBGAME';
+          const seriesPrefix =
+            sport === 'ncaaf'
+              ? 'KXNCAAFGAME'
+              : sport === 'ncaab'
+              ? 'KXNCAAMBGAME'
+              : 'KXCBAGAME';
           if (eventTicker.toUpperCase().startsWith(seriesPrefix)) {
             // Likely a game market, include it and let parsing decide
             return true;
@@ -177,7 +188,10 @@ export class KalshiClient {
   /**
    * Parse raw Kalshi market data into our Market format
    */
-  private parseMarkets(rawMarkets: any[], sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Market[] {
+  private parseMarkets(
+    rawMarkets: any[],
+    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' = 'nba'
+  ): Market[] {
     const markets: Market[] = [];
     let skippedGameInfo = 0;
     let skippedPrice = 0;
@@ -231,7 +245,10 @@ export class KalshiClient {
    * Kalshi ticker format: KXNBAGAME-25NOV28DALLAL-LAL
    * Event ticker format: KXNBAGAME-25NOV28DALLAL (contains both team abbreviations)
    */
-  private extractGameInfo(raw: any, sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' = 'nba'): Game | null {
+  private extractGameInfo(
+    raw: any,
+    sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' = 'nba'
+  ): Game | null {
     const title = (raw.title || raw.name || '').toString();
     const ticker = (raw.ticker || '').toString();
     const eventTicker = (raw.event_ticker || '').toString();
@@ -270,15 +287,26 @@ export class KalshiClient {
     
     // For college sports, we'll use a simplified approach - just try to parse the ticker
     // College teams have many variations, so we'll be more flexible
-    const teamAbbrevMap = sport === 'nfl' ? nflTeamAbbrevMap : 
-                         sport === 'nhl' ? nhlTeamAbbrevMap : 
-                         sport === 'ncaab' || sport === 'ncaaf' ? {} : // Empty map for college - will parse from ticker
-                         nbaTeamAbbrevMap;
-    const seriesPrefix = sport === 'nfl' ? 'KXNFLGAME' : 
-                        sport === 'nhl' ? 'KXNHLGAME' : 
-                        sport === 'ncaab' ? 'KXNCAAMBGAME' :
-                        sport === 'ncaaf' ? 'KXNCAAFGAME' :
-                        'KXNBAGAME';
+    const teamAbbrevMap =
+      sport === 'nfl'
+        ? nflTeamAbbrevMap
+        : sport === 'nhl'
+        ? nhlTeamAbbrevMap
+        : sport === 'ncaab' || sport === 'ncaaf' || sport === 'cba'
+        ? {} // Empty map for college/CBA - will parse from ticker
+        : nbaTeamAbbrevMap;
+    const seriesPrefix =
+      sport === 'nfl'
+        ? 'KXNFLGAME'
+        : sport === 'nhl'
+        ? 'KXNHLGAME'
+        : sport === 'ncaab'
+        ? 'KXNCAAMBGAME'
+        : sport === 'ncaaf'
+        ? 'KXNCAAFGAME'
+        : sport === 'cba'
+        ? 'KXCBAGAME'
+        : 'KXNBAGAME';
     
     // Try to extract from event ticker first (most reliable)
     // Format: KXNBAGAME-25NOV28DALLAL or kxnflgame-25DEC01NYGNE
@@ -523,6 +551,17 @@ export class KalshiClient {
     }
     
     if (!awayAbbrev || !homeAbbrev) {
+      // For CBA/spread-only use, fall back to generic team labels instead of dropping
+      if (sport === 'cba') {
+        const id = `${raw.event_ticker || raw.ticker || ''}`;
+        return {
+          id,
+          homeTeam: homeAbbrev || 'HOME',
+          awayTeam: awayAbbrev || 'AWAY',
+          scheduledTime: raw.open_time || raw.close_time || new Date().toISOString(),
+          status: raw.status,
+        };
+      }
       return null;
     }
 

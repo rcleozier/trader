@@ -3,6 +3,7 @@ import { KalshiClient } from './clients/kalshiClient';
 import { ESPNClient } from './clients/espnClient';
 import { MispricingService } from './services/mispricingService';
 import { TradingService } from './services/tradingService';
+import { Mispricing, Market } from './types/markets';
 import { parseTicker, parseTickerToGame } from './lib/ticker';
 
 // Minimal type for games data (PDF generation disabled)
@@ -52,6 +53,113 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
     const mispricingService = new MispricingService();
     const { mispricings, comparisons } = mispricingService.findMispricings(kalshiMarkets, espnOdds);
     console.log(`${sportEmoji} ${colors.bright}${colors.cyan}${sportName}${colors.reset}: Found ${colors.yellow}${comparisons.length}${colors.reset} games with comparison data`);
+
+    // --- Tiered trading strategy orchestration ---
+    if (tradingService && balance !== null && balance !== undefined) {
+      // Primary: pure(ish) arbitrage across this sport's markets
+      const arbBundles = tradingService.findArbitrageBundles(kalshiMarkets);
+      if (arbBundles.length > 0) {
+        console.log(
+          `${sportEmoji} ${colors.bright}${colors.green}Arbitrage bundles found:${colors.reset} ${arbBundles.length}`
+        );
+        for (const bundle of arbBundles) {
+          const shouldTrade = await tradingService.shouldPlaceTrade(balance);
+          if (!shouldTrade) break;
+
+          // Construct synthetic mispricing objects for each leg so we can
+          // reuse the core order placement / sizing logic.
+          const base: Omit<Mispricing, 'side' | 'kalshiPrice' | 'kalshiImpliedProbability'> = {
+            game: bundle.game,
+            sportsbookOdds: 0,
+            sportsbookImpliedProbability: bundle.totalProb,
+            difference: (1 - bundle.totalProb),
+            differencePct: bundle.edgePct,
+          };
+
+          const homeMispricing: Mispricing = {
+            ...base,
+            side: 'home',
+            kalshiPrice: bundle.home.price,
+            kalshiImpliedProbability: bundle.home.impliedProbability,
+            sportsbookImpliedProbability: bundle.totalProb / 2,
+          } as Mispricing;
+
+          const awayMispricing: Mispricing = {
+            ...base,
+            side: 'away',
+            kalshiPrice: bundle.away.price,
+            kalshiImpliedProbability: bundle.away.impliedProbability,
+            sportsbookImpliedProbability: bundle.totalProb / 2,
+          } as Mispricing;
+
+          // Allocate half of desired capital to each leg; the per-strategy and
+          // per-market caps in TradingService will enforce strict limits.
+          const perLegStake = (config.trading.maxBetSize || 5) / 2;
+
+          const homeResult = await tradingService.placeTrade(
+            'arbitrage',
+            homeMispricing,
+            bundle.home.ticker,
+            activePositions,
+            activeOrders,
+            perLegStake
+          );
+          const awayResult = await tradingService.placeTrade(
+            'arbitrage',
+            awayMispricing,
+            bundle.away.ticker,
+            activePositions,
+            activeOrders,
+            perLegStake
+          );
+
+          if (homeResult.success && awayResult.success) {
+            console.log(
+              `${colors.green}✅ Executed arbitrage bundle on game ${bundle.game.awayTeam}@${bundle.game.homeTeam}${colors.reset}`
+            );
+          }
+        }
+      }
+
+      // Secondary: spread farming at probability extremes if no arbitrage bundles
+      if (!tradingService.findArbitrageBundles(kalshiMarkets).length) {
+        const spreadCandidates = tradingService.findSpreadExtremes(kalshiMarkets);
+        if (spreadCandidates.length > 0) {
+          console.log(
+            `${sportEmoji} ${colors.bright}${colors.yellow}Spread-farming candidates:${colors.reset} ${spreadCandidates.length}`
+          );
+          for (const mkt of spreadCandidates) {
+            const shouldTrade = await tradingService.shouldPlaceTrade(balance);
+            if (!shouldTrade) break;
+
+            const implied = mkt.impliedProbability;
+            const syntheticMispricing: Mispricing = {
+              game: mkt.game,
+              side: mkt.side,
+              kalshiPrice: mkt.price,
+              kalshiImpliedProbability: implied,
+              sportsbookOdds: 0,
+              sportsbookImpliedProbability: implied,
+              difference: 0,
+              differencePct: Math.abs(implied - 0.5) * 100,
+              isKalshiOvervaluing: implied > 0.5,
+            };
+
+            // Use a smaller sizing than arbitrage (half of maxBetSize or $2 fallback)
+            const stake = (config.trading.maxBetSize || 4) / 2;
+
+            await tradingService.placeTrade(
+              'spread',
+              syntheticMispricing,
+              mkt.ticker,
+              activePositions,
+              activeOrders,
+              stake
+            );
+          }
+        }
+      }
+    }
     
     // Create a map of positions by ticker - store array since there can be both YES and NO positions
     const positionsByTicker = new Map<string, any[]>();
@@ -242,7 +350,13 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
                 isKalshiOvervaluing: isKalshiOvervaluing,
               };
               
-              const tradeResult = await tradingService.placeTrade(mispricingForTrade, market.ticker, activePositions, activeOrders);
+              const tradeResult = await tradingService.placeTrade(
+                'mispricing',
+                mispricingForTrade,
+                market.ticker,
+                activePositions,
+                activeOrders
+              );
               if (tradeResult.success) {
                 console.log(`      ${colors.green}✅ Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
               } else if (tradeResult.error !== 'Existing position found' && tradeResult.error !== 'Pending order found') {
@@ -280,6 +394,77 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
       console.error(`${colors.gray}${error.stack}${colors.reset}`);
     }
     return [];
+  }
+}
+
+/**
+ * Spread-farming-only runner for additional series where we don't
+ * have external odds (e.g. Chinese basketball KXCBAGAME).
+ */
+async function runSpreadFarmingForSeries(
+  seriesTicker: string,
+  sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba',
+  label: string,
+  emoji: string,
+  activePositions: any[],
+  activeOrders: any[],
+  tradingService?: TradingService,
+  balance?: number | null
+): Promise<void> {
+  if (!tradingService || balance == null) return;
+
+  try {
+    const kalshiClient = new KalshiClient();
+    const markets: Market[] = await kalshiClient.fetchMarkets(seriesTicker, sport);
+    console.log(
+      `\n${emoji} ${colors.bright}${colors.cyan}${label}${colors.reset}: Found ${colors.yellow}${markets.length}${colors.reset} Kalshi markets (spread farming only)`
+    );
+
+    const spreadCandidates = tradingService.findSpreadExtremes(markets);
+    if (spreadCandidates.length === 0) {
+      console.log(
+        `${emoji} ${colors.bright}${colors.cyan}${label}${colors.reset}: ${colors.gray}No extreme spread candidates found${colors.reset}`
+      );
+      return;
+    }
+
+    console.log(
+      `${emoji} ${colors.bright}${colors.yellow}Spread-farming candidates (${label}):${colors.reset} ${spreadCandidates.length}`
+    );
+
+    for (const mkt of spreadCandidates) {
+      const shouldTrade = await tradingService.shouldPlaceTrade(balance);
+      if (!shouldTrade) break;
+
+      const implied = mkt.impliedProbability;
+      const syntheticMispricing: Mispricing = {
+        game: mkt.game,
+        side: mkt.side,
+        kalshiPrice: mkt.price,
+        kalshiImpliedProbability: implied,
+        sportsbookOdds: 0,
+        sportsbookImpliedProbability: implied,
+        difference: 0,
+        differencePct: Math.abs(implied - 0.5) * 100,
+        isKalshiOvervaluing: implied > 0.5,
+      };
+
+      // Use smaller sizing for spread farming; per-strategy caps still apply.
+      const stake = (config.trading.maxBetSize || 4) / 2;
+
+      await tradingService.placeTrade(
+        'spread',
+        syntheticMispricing,
+        mkt.ticker,
+        activePositions,
+        activeOrders,
+        stake
+      );
+    }
+  } catch (error: any) {
+    console.error(
+      `${emoji} ${colors.bright}${colors.red}${label} spread farming error:${colors.reset} ${error.message}`
+    );
   }
 }
 
@@ -469,6 +654,18 @@ export async function runMispricingCheck(): Promise<void> {
   await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance);
   await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance);
   await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance);
+
+  // Additional spread-farming-only markets (no external odds)
+  await runSpreadFarmingForSeries(
+    'KXCBAGAME',
+    'cba',
+    'Chinese Basketball',
+    '🏀',
+    activePositions,
+    activeOrders,
+    tradingService,
+    balance
+  );
 }
 
 // Main execution for CLI usage only

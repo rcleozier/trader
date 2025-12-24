@@ -62,7 +62,12 @@ interface Config {
   trading: {
     liveTrades: boolean;
     minBalanceToBet: number;
-      maxBetSize?: number;
+    maxBetSize?: number;
+    // Optional capital controls (all in dollars)
+    maxPerMarket?: number;
+    maxPerStrategyArbitrage?: number;
+    maxPerStrategySpread?: number;
+    maxPerStrategyMispricing?: number;
   };
 }
 
@@ -147,6 +152,17 @@ export const config: Config = {
     liveTrades: getOptionalEnv('LIVE_TRADES', 'false') === 'true',
     minBalanceToBet: parseFloat(getOptionalEnv('MIN_BALANCE_TO_BET', '10') || '10'),
     maxBetSize: getOptionalEnv('MAX_BET_SIZE') ? parseFloat(getOptionalEnv('MAX_BET_SIZE')!) : undefined,
+    // Optional capital controls (in dollars)
+    maxPerMarket: getOptionalEnv('MAX_PER_MARKET') ? parseFloat(getOptionalEnv('MAX_PER_MARKET')!) : undefined,
+    maxPerStrategyArbitrage: getOptionalEnv('MAX_PER_STRATEGY_ARBITRAGE')
+      ? parseFloat(getOptionalEnv('MAX_PER_STRATEGY_ARBITRAGE')!)
+      : undefined,
+    maxPerStrategySpread: getOptionalEnv('MAX_PER_STRATEGY_SPREAD')
+      ? parseFloat(getOptionalEnv('MAX_PER_STRATEGY_SPREAD')!)
+      : undefined,
+    maxPerStrategyMispricing: getOptionalEnv('MAX_PER_STRATEGY_MISPRICING')
+      ? parseFloat(getOptionalEnv('MAX_PER_STRATEGY_MISPRICING')!)
+      : undefined,
   },
 };
 

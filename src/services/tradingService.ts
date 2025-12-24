@@ -1,6 +1,6 @@
 import { PortfolioApi, MarketsApi } from 'kalshi-typescript';
 import { config } from '../config';
-import { Mispricing } from '../types/markets';
+import { Mispricing, Market, Game } from '../types/markets';
 import { KalshiClient } from '../clients/kalshiClient';
 import { parseTickerToGame } from '../lib/ticker';
 
@@ -12,10 +12,17 @@ const colors = {
   red: '\x1b[31m',
 };
 
+type StrategyName = 'arbitrage' | 'spread' | 'mispricing';
+
 export interface TradingConfig {
   liveTrades: boolean;
   minBalanceToBet: number;
   maxBetSize?: number;
+  // Optional capital controls (all in dollars)
+  maxPerMarket?: number;
+  maxPerStrategyArbitrage?: number;
+  maxPerStrategySpread?: number;
+  maxPerStrategyMispricing?: number;
 }
 
 export class TradingService {
@@ -30,11 +37,45 @@ export class TradingService {
    */
   private tradedGameKeys: Set<string> = new Set();
 
+  /**
+   * Per-strategy capital usage for the current process run (in dollars).
+   * This resets whenever the process restarts (e.g. each cron invocation).
+   */
+  private strategyCapitalUsed: Record<StrategyName, number> = {
+    arbitrage: 0,
+    spread: 0,
+    mispricing: 0,
+  };
+
   constructor(portfolioApi: PortfolioApi, marketsApi: MarketsApi, tradingConfig: TradingConfig, kalshiClient?: KalshiClient) {
     this.portfolioApi = portfolioApi;
     this.marketsApi = marketsApi;
     this.tradingConfig = tradingConfig;
     this.kalshiClient = kalshiClient;
+  }
+
+  private getStrategyLimit(strategy: StrategyName): number | undefined {
+    switch (strategy) {
+      case 'arbitrage':
+        return this.tradingConfig.maxPerStrategyArbitrage;
+      case 'spread':
+        return this.tradingConfig.maxPerStrategySpread;
+      case 'mispricing':
+        return this.tradingConfig.maxPerStrategyMispricing;
+      default:
+        return undefined;
+    }
+  }
+
+  private getRemainingStrategyCapital(strategy: StrategyName): number {
+    const limit = this.getStrategyLimit(strategy);
+    if (limit === undefined) return Number.POSITIVE_INFINITY;
+    return Math.max(0, limit - this.strategyCapitalUsed[strategy]);
+  }
+
+  private registerStrategySpend(strategy: StrategyName, amountDollars: number): void {
+    if (!Number.isFinite(amountDollars) || amountDollars <= 0) return;
+    this.strategyCapitalUsed[strategy] += amountDollars;
   }
 
   /**
@@ -127,9 +168,19 @@ export class TradingService {
   }
 
   /**
-   * Place a buy order for a mispricing opportunity
+   * Core order placement used by all strategies.
+   * - Applies per-market and per-strategy capital caps.
+   * - Ensures we don't double-enter the same game.
+   * - Logs which strategy triggered the trade.
    */
-  async placeTrade(mispricing: Mispricing, marketTicker: string, activePositions: any[] = [], activeOrders: any[] = []): Promise<{ success: boolean; orderId?: string; error?: string }> {
+  async placeTrade(
+    strategy: StrategyName,
+    mispricing: Mispricing,
+    marketTicker: string,
+    activePositions: any[] = [],
+    activeOrders: any[] = [],
+    desiredStakeDollars?: number
+  ): Promise<{ success: boolean; orderId?: string; error?: string }> {
     // First, block if we've already traded this game in this run
     const gameKey = this.getGameKeyFromTicker(marketTicker);
     if (gameKey && this.tradedGameKeys.has(gameKey)) {
@@ -174,7 +225,7 @@ export class TradingService {
       return { success: false, error: 'Pending order found' };
     }
 
-    // Determine if we should buy YES or NO
+    // Determine if we should buy YES or NO (mispricing direction)
     // If Kalshi undervalues (Kalshi prob < ESPN prob), buy YES on Kalshi
     // If Kalshi overvalues (Kalshi prob > ESPN prob), buy NO on Kalshi
     const side = mispricing.isKalshiOvervaluing ? 'no' : 'yes';
@@ -235,18 +286,33 @@ export class TradingService {
       console.log(`  Warning: Could not fetch ask price, using cached price: ${buyPrice.toFixed(1)} cents (${error.message})`);
     }
     
-    // Calculate bet size in dollars based on MAX_BET_SIZE.
-    // If MAX_BET_SIZE is set, always bet that full dollar amount on each qualifying trade.
-    // Otherwise, default to $1 per percentage point of mispricing.
-    let betSizeDollars = 0;
-    if (this.tradingConfig.maxBetSize) {
-      betSizeDollars = this.tradingConfig.maxBetSize;
-    } else {
-      betSizeDollars = mispricing.differencePct;
-    }
+    // Base bet size for this opportunity.
+    // Priority:
+    // 1) Caller-provided desiredStakeDollars (e.g. arbitrage bundle sizing)
+    // 2) Configured maxBetSize
+    // 3) Default: $1 per percentage point of edge
+    let betSizeDollars =
+      desiredStakeDollars ??
+      (this.tradingConfig.maxBetSize ?? mispricing.differencePct);
 
     // Ensure minimum bet size (Kalshi minimum is typically $1)
     betSizeDollars = Math.max(betSizeDollars, 1);
+
+    // Apply per-market cap if configured
+    if (this.tradingConfig.maxPerMarket !== undefined) {
+      betSizeDollars = Math.min(betSizeDollars, this.tradingConfig.maxPerMarket);
+    }
+
+    // Apply per-strategy remaining capital cap
+    const remainingForStrategy = this.getRemainingStrategyCapital(strategy);
+    betSizeDollars = Math.min(betSizeDollars, remainingForStrategy);
+
+    if (betSizeDollars < 1) {
+      console.log(
+        `[TRADING] Skipping trade for ${marketTicker} via ${strategy} - not enough remaining strategy capital.`
+      );
+      return { success: false, error: 'Strategy capital exhausted' };
+    }
 
     // Calculate number of contracts based on desired dollar amount and price
     // Cost per contract = price / 100 dollars
@@ -260,7 +326,8 @@ export class TradingService {
     
     // Always log trade details (even in dry run mode)
     const tradeMode = this.tradingConfig.liveTrades ? 'LIVE' : 'DRY RUN';
-    console.log(`\n[TRADING - ${tradeMode}] Would place trade:`);
+    console.log(`\n[TRADING - ${tradeMode}] Strategy: ${strategy.toUpperCase()}`);
+    console.log(`[TRADING] Would place trade:`);
     console.log(`  Game: ${mispricing.game.awayTeam} @ ${mispricing.game.homeTeam}`);
     console.log(`  Side: ${mispricing.side.toUpperCase()} (${side.toUpperCase()})`);
     console.log(`  Market: ${marketTicker}`);
@@ -274,6 +341,8 @@ export class TradingService {
     // Check if live trades are enabled
     if (!this.tradingConfig.liveTrades) {
       console.log(`  Status: ${colors.yellow}DRY RUN - No actual trade placed${colors.reset}`);
+      // Register theoretical spend for logging consistency
+      this.registerStrategySpend(strategy, parseFloat(actualBetSizeDollars));
       return { success: true, orderId: 'dry-run-order-id' };
     }
 
@@ -308,6 +377,8 @@ export class TradingService {
         if (gameKey) {
           this.tradedGameKeys.add(gameKey);
         }
+        // Track capital spent for this strategy
+        this.registerStrategySpend(strategy, parseFloat(actualBetSizeDollars));
         return { success: true, orderId };
       } else {
         console.log(`  ${colors.red}❌ No order returned from API${colors.reset}`);
@@ -337,6 +408,88 @@ export class TradingService {
     }
 
     return true;
+  }
+
+  /**
+   * Primary strategy: search for near risk-free bundles where
+   * HOME_YES + AWAY_YES < 1.0 (after buffer) so buying both sides
+   * locks in profit regardless of outcome.
+   *
+   * Note: This is an approximation using game-side markets as proxies
+   * for YES/NO; real orderbook-level arbitrage would require per-side
+   * bid/ask depth which is not modeled here.
+   */
+  findArbitrageBundles(markets: Market[], feeBuffer: number = 0.01): Array<{
+    game: Game;
+    home: Market;
+    away: Market;
+    totalProb: number;
+    edgePct: number;
+  }> {
+    const byGame = new Map<string, { home?: Market; away?: Market; game: Game }>();
+
+    for (const m of markets) {
+      const key = m.gameId;
+      if (!byGame.has(key)) {
+        byGame.set(key, { game: m.game });
+      }
+      const entry = byGame.get(key)!;
+      if (m.side === 'home') entry.home = m;
+      else entry.away = m;
+    }
+
+    const bundles: Array<{
+      game: Game;
+      home: Market;
+      away: Market;
+      totalProb: number;
+      edgePct: number;
+    }> = [];
+
+    for (const { game, home, away } of byGame.values()) {
+      if (!home || !away) continue;
+
+      const homeProb = home.impliedProbability;
+      const awayProb = away.impliedProbability;
+      const totalProb = homeProb + awayProb;
+
+      // Arbitrage if probabilities sum to strictly less than 1 minus buffer
+      if (totalProb < 1 - feeBuffer) {
+        const edge = (1 - feeBuffer - totalProb) * 100;
+        bundles.push({
+          game,
+          home,
+          away,
+          totalProb,
+          edgePct: edge,
+        });
+      }
+    }
+
+    // Highest edge first
+    return bundles.sort((a, b) => b.edgePct - a.edgePct);
+  }
+
+  /**
+   * Secondary strategy: spread farming at probability extremes.
+   * YES ≤ 0.15 or YES ≥ 0.85, prefer higher volume/tighter spreads
+   * (approximated here by using more extreme probabilities).
+   */
+  findSpreadExtremes(markets: Market[]): Market[] {
+    const EXTREME_LOW = 0.15;
+    const EXTREME_HIGH = 0.85;
+
+    const candidates = markets.filter((m) => {
+      const p = m.impliedProbability;
+      return p <= EXTREME_LOW || p >= EXTREME_HIGH;
+    });
+
+    // Prefer more extreme probabilities first (farther from 0.5)
+    return candidates.sort((a, b) => {
+      const da = Math.abs(a.impliedProbability - 0.5);
+      const db = Math.abs(b.impliedProbability - 0.5);
+      return db - da;
+    });
   }
 }
 
