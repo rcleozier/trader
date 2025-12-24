@@ -403,7 +403,7 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
  */
 async function runSpreadFarmingForSeries(
   seriesTicker: string,
-  sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba',
+  sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf' | 'cba' | 'nbl',
   label: string,
   emoji: string,
   activePositions: any[],
