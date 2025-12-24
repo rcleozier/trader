@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trader Bot Status</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+          sans-serif;
+        background: #05070b;
+        color: #f5f5f7;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      .card {
+        background: #0b0f18;
+        border-radius: 16px;
+        padding: 24px 28px;
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.6);
+        max-width: 420px;
+        width: 100%;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(96, 165, 250, 0.15);
+        color: #bfdbfe;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      h1 {
+        margin: 14px 0 6px;
+        font-size: 20px;
+      }
+      p {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #9ca3af;
+      }
+      .meta {
+        margin-top: 14px;
+        font-size: 12px;
+        color: #6b7280;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          'Liberation Mono', 'Courier New', monospace;
+        font-size: 12px;
+        background: rgba(15, 23, 42, 0.9);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="pill">
+        <span>Trader Bot</span>
+        <span>•</span>
+        <span>Cron on Vercel</span>
+      </div>
+      <h1>This Week’s Drops</h1>
+      <p>
+        This project runs as a scheduled job on Vercel every
+        <strong>5 minutes</strong> and does not require a traditional web UI.
+      </p>
+      <p class="meta">
+        Cron endpoint:
+        <code>/api/mispricing</code>
+      </p>
+    </main>
+  </body>
+  </html>
+
+
