@@ -1,6 +1,7 @@
 import { PortfolioApi, MarketsApi } from 'kalshi-typescript';
 import { config } from '../config';
 import { Mispricing, Market, Game } from '../types/markets';
+import { appendLedgerEntry } from './tradeLedger';
 import { KalshiClient } from '../clients/kalshiClient';
 import { parseTickerToGame } from '../lib/ticker';
 
@@ -202,7 +203,8 @@ export class TradingService {
     marketTicker: string,
     activePositions: any[] = [],
     activeOrders: any[] = [],
-    desiredStakeDollars?: number
+    desiredStakeDollars?: number,
+    rationale?: string
   ): Promise<{ success: boolean; orderId?: string; error?: string }> {
     // First, block if we've already traded this game in this run
     const gameKey = this.getGameKeyFromTicker(marketTicker);
@@ -362,24 +364,39 @@ export class TradingService {
     console.log(`  Direction: ${mispricing.isKalshiOvervaluing ? 'Kalshi overvalues - bet NO' : 'Kalshi undervalues - bet YES'}`);
 
     // Check if live trades are enabled
+    const ledgerStrategyLabel =
+      strategy === 'arbitrage' ? 'ARBITRAGE' : strategy === 'spread' ? 'SPREAD_FARM' : 'MISPRICING';
+
     if (!this.tradingConfig.liveTrades) {
       console.log(`  Status: ${colors.yellow}DRY RUN - No actual trade placed${colors.reset}`);
-      // Register theoretical spend for logging consistency
       this.registerStrategySpend(strategy, parseFloat(actualBetSizeDollars));
+
+      // Record dry-run intent in ledger (without order_id)
+      await appendLedgerEntry({
+        strategy: ledgerStrategyLabel,
+        rationale: rationale || 'dry-run',
+        created_at: new Date().toISOString(),
+        market_id: marketTicker,
+        side: side.toUpperCase() as 'YES' | 'NO',
+        price: Math.floor(buyPrice),
+        qty: finalContractCount,
+        expected_edge_pct: mispricing.differencePct,
+      });
+
       return { success: true, orderId: 'dry-run-order-id' };
     }
 
     try {
+      const clientOrderId = `${strategy}-entry-${Date.now()}`;
+
       // Create order request
-      // Kalshi uses count in contracts (not cents), and price in cents (0-100)
-      // For limit orders, we need to specify yes_price or no_price
       const orderRequest: any = {
         ticker: marketTicker,
         side: side,
         action: 'buy',
-        count: finalContractCount, // Number of contracts
+        count: finalContractCount,
         type: 'limit',
-        client_order_id: `${strategy}-entry-${Date.now()}`, // Unique client order ID
+        client_order_id: clientOrderId,
       };
 
       // Set price based on side
@@ -400,6 +417,19 @@ export class TradingService {
         if (gameKey) {
           this.tradedGameKeys.add(gameKey);
         }
+        // Record in strategy ledger
+        await appendLedgerEntry({
+          order_id: orderId,
+          strategy: ledgerStrategyLabel,
+          rationale: rationale || '',
+          created_at: new Date().toISOString(),
+          market_id: marketTicker,
+          side: side.toUpperCase() as 'YES' | 'NO',
+          price: Math.floor(buyPrice),
+          qty: finalContractCount,
+          expected_edge_pct: mispricing.differencePct,
+        });
+
         // For spread-farming entries, immediately place a take-profit GTC limit order
         if (strategy === 'spread') {
           const entryPrice = Math.floor(buyPrice);

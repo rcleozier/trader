@@ -102,7 +102,8 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
             bundle.home.ticker,
             activePositions,
             activeOrders,
-            perLegStake
+            perLegStake,
+            `YES+NO=${bundle.totalProb.toFixed(2)} arb (edge ${bundle.edgePct.toFixed(2)}pp)`
           );
           const awayResult = await tradingService.placeTrade(
             'arbitrage',
@@ -110,7 +111,8 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
             bundle.away.ticker,
             activePositions,
             activeOrders,
-            perLegStake
+            perLegStake,
+            `YES+NO=${bundle.totalProb.toFixed(2)} arb (edge ${bundle.edgePct.toFixed(2)}pp)`
           );
 
           if (homeResult.success && awayResult.success) {
@@ -154,7 +156,10 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
               mkt.ticker,
               activePositions,
               activeOrders,
-              stake
+              stake,
+              syntheticMispricing.kalshiImpliedProbability <= 0.15
+                ? 'prob<=0.15 extreme'
+                : 'prob>=0.85 extreme'
             );
           }
         }
@@ -349,13 +354,16 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
                 differencePct: data.diffPct || 0,
                 isKalshiOvervaluing: isKalshiOvervaluing,
               };
+              const rationale = `ESPN edge ${diffPct}pp (${kalshiPct}% vs ${espnPct}%)`;
               
               const tradeResult = await tradingService.placeTrade(
                 'mispricing',
                 mispricingForTrade,
                 market.ticker,
                 activePositions,
-                activeOrders
+                activeOrders,
+                undefined,
+                rationale
               );
               if (tradeResult.success) {
                 console.log(`      ${colors.green}✅ Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
@@ -670,18 +678,6 @@ export async function runMispricingCheck(): Promise<void> {
   await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance);
   await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance);
   await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance);
-
-  // Additional spread-farming-only markets (no external odds)
-  await runSpreadFarmingForSeries(
-    'KXCBAGAME',
-    'cba',
-    'Chinese Basketball',
-    '🏀',
-    activePositions,
-    activeOrders,
-    tradingService,
-    balance
-  );
 
   await runSpreadFarmingForSeries(
     'KXNBLGAME',
