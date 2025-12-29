@@ -817,35 +817,15 @@ export async function runMispricingCheck(): Promise<void> {
   }
   
   // Run checks for all sports, passing active positions, orders, trading service, and risk service
+  // Run mispricing strategy only (arbitrage and spread farming disabled)
   await runMispricingCheckForSport('nba', activePositions, activeOrders, tradingService, balance, riskService);
   await runMispricingCheckForSport('nfl', activePositions, activeOrders, tradingService, balance, riskService);
   await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance, riskService);
   await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance, riskService);
   await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance, riskService);
 
-  await runSpreadFarmingForSeries(
-    'KXNBLGAME',
-    'nbl',
-    'NBL Basketball',
-    '🏀',
-    activePositions,
-    activeOrders,
-    tradingService,
-    balance,
-    riskService
-  );
-
-  await runSpreadFarmingForSeries(
-    'KXEUROLEAGUEGAME',
-    'euro',
-    'Euroleague Basketball',
-    '🏀',
-    activePositions,
-    activeOrders,
-    tradingService,
-    balance,
-    riskService
-  );
+  // Spread farming disabled - was causing losses
+  // await runSpreadFarmingForSeries(...)
 }
 
 // Main execution for CLI usage only
