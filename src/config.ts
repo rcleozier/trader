@@ -71,6 +71,28 @@ interface Config {
     maxHoldTimeHours?: number;
     maxOpenSpreadPositions?: number;
   };
+  risk: {
+    // Hard risk limits
+    maxPositionsTotal?: number;
+    maxPositionsPerMarket?: number;
+    maxOrderNotional?: number;
+    maxDailyTrades?: number;
+    maxDailyNotional?: number;
+    maxDailyLoss?: number;
+    // Exit rules (applied to all strategies)
+    takeProfitCentsPerContract?: number;
+    takeProfitPctOfCost?: number;
+    maxHoldMinutes?: number;
+    stopLossPct?: number;
+    improveExitByOneTick?: boolean;
+    // Entry filters
+    arbitrageFeeBuffer?: number; // e.g. 0.01 = require YES+NO < 0.99
+    arbitrageMinLiquidity?: number; // contracts
+    spreadMaxSpreadCents?: number; // max bid-ask spread
+    spreadMinLiquidity?: number; // contracts
+    spreadReserveCash?: number; // dollars to keep free
+    spreadReserveCashPct?: number; // percentage of balance to keep free
+  };
 }
 
 function requireEnv(key: string): string {
@@ -170,6 +192,57 @@ export const config: Config = {
       : 24,
     maxOpenSpreadPositions: getOptionalEnv('MAX_OPEN_SPREAD_POSITIONS')
       ? parseInt(getOptionalEnv('MAX_OPEN_SPREAD_POSITIONS')!, 10)
+      : undefined,
+  },
+  risk: {
+    maxPositionsTotal: getOptionalEnv('MAX_POSITIONS_TOTAL')
+      ? parseInt(getOptionalEnv('MAX_POSITIONS_TOTAL')!, 10)
+      : undefined,
+    maxPositionsPerMarket: getOptionalEnv('MAX_POSITIONS_PER_MARKET')
+      ? parseInt(getOptionalEnv('MAX_POSITIONS_PER_MARKET')!, 10)
+      : undefined,
+    maxOrderNotional: getOptionalEnv('MAX_ORDER_NOTIONAL')
+      ? parseFloat(getOptionalEnv('MAX_ORDER_NOTIONAL')!)
+      : undefined,
+    maxDailyTrades: getOptionalEnv('MAX_DAILY_TRADES')
+      ? parseInt(getOptionalEnv('MAX_DAILY_TRADES')!, 10)
+      : undefined,
+    maxDailyNotional: getOptionalEnv('MAX_DAILY_NOTIONAL')
+      ? parseFloat(getOptionalEnv('MAX_DAILY_NOTIONAL')!)
+      : undefined,
+    maxDailyLoss: getOptionalEnv('MAX_DAILY_LOSS')
+      ? parseFloat(getOptionalEnv('MAX_DAILY_LOSS')!)
+      : undefined,
+    takeProfitCentsPerContract: getOptionalEnv('TAKE_PROFIT_CENTS_PER_CONTRACT')
+      ? parseFloat(getOptionalEnv('TAKE_PROFIT_CENTS_PER_CONTRACT')!)
+      : 2,
+    takeProfitPctOfCost: getOptionalEnv('TAKE_PROFIT_PCT_OF_COST')
+      ? parseFloat(getOptionalEnv('TAKE_PROFIT_PCT_OF_COST')!)
+      : 10,
+    maxHoldMinutes: getOptionalEnv('MAX_HOLD_MINUTES')
+      ? parseFloat(getOptionalEnv('MAX_HOLD_MINUTES')!)
+      : 180,
+    stopLossPct: getOptionalEnv('STOP_LOSS_PCT')
+      ? parseFloat(getOptionalEnv('STOP_LOSS_PCT')!)
+      : undefined,
+    improveExitByOneTick: getOptionalEnv('IMPROVE_EXIT_BY_ONE_TICK', 'true') === 'true',
+    arbitrageFeeBuffer: getOptionalEnv('ARBITRAGE_FEE_BUFFER')
+      ? parseFloat(getOptionalEnv('ARBITRAGE_FEE_BUFFER')!)
+      : 0.01,
+    arbitrageMinLiquidity: getOptionalEnv('ARBITRAGE_MIN_LIQUIDITY')
+      ? parseInt(getOptionalEnv('ARBITRAGE_MIN_LIQUIDITY')!, 10)
+      : undefined,
+    spreadMaxSpreadCents: getOptionalEnv('SPREAD_MAX_SPREAD_CENTS')
+      ? parseFloat(getOptionalEnv('SPREAD_MAX_SPREAD_CENTS')!)
+      : 2,
+    spreadMinLiquidity: getOptionalEnv('SPREAD_MIN_LIQUIDITY')
+      ? parseInt(getOptionalEnv('SPREAD_MIN_LIQUIDITY')!, 10)
+      : undefined,
+    spreadReserveCash: getOptionalEnv('SPREAD_RESERVE_CASH')
+      ? parseFloat(getOptionalEnv('SPREAD_RESERVE_CASH')!)
+      : undefined,
+    spreadReserveCashPct: getOptionalEnv('SPREAD_RESERVE_CASH_PCT')
+      ? parseFloat(getOptionalEnv('SPREAD_RESERVE_CASH_PCT')!)
       : undefined,
   },
 };

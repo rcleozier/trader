@@ -3,6 +3,8 @@ import { KalshiClient } from './clients/kalshiClient';
 import { ESPNClient } from './clients/espnClient';
 import { MispricingService } from './services/mispricingService';
 import { TradingService } from './services/tradingService';
+import { RiskService } from './services/riskService';
+import { PositionManager } from './services/positionManager';
 import { Mispricing, Market } from './types/markets';
 import { parseTicker, parseTickerToGame } from './lib/ticker';
 
@@ -34,7 +36,7 @@ type GameData = {
 };
 import { config } from './config';
 
-async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = [], activeOrders: any[] = [], tradingService?: TradingService, balance?: number | null): Promise<GameData[]> {
+async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab' | 'ncaaf', activePositions: any[] = [], activeOrders: any[] = [], tradingService?: TradingService, balance?: number | null, riskService?: RiskService): Promise<GameData[]> {
   const sportConfig = config.sports[sport];
   const sportName = sport.toUpperCase();
   const sportEmoji = sport === 'nba' ? '🏀' : sport === 'nfl' ? '🏈' : sport === 'nhl' ? '🏒' : sport === 'ncaab' ? '🏀' : sport === 'ncaaf' ? '🏈' : '';
@@ -96,6 +98,24 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
           // per-market caps in TradingService will enforce strict limits.
           const perLegStake = (config.trading.maxBetSize || 5) / 2;
 
+          // Risk checks before placing trades
+          if (riskService) {
+            const homeCheck = riskService.canPlaceTrade(
+              perLegStake,
+              balance || 0,
+              activePositions.length,
+              activeOrders
+            );
+            if (!homeCheck.allowed) {
+              console.log(`[RISK] Skipping arbitrage: ${homeCheck.reason}`);
+              continue;
+            }
+            if (!riskService.checkMaxPositionsPerMarket(bundle.home.ticker, activePositions)) {
+              console.log(`[RISK] Max positions per market reached for ${bundle.home.ticker}`);
+              continue;
+            }
+          }
+
           const homeResult = await tradingService.placeTrade(
             'arbitrage',
             homeMispricing,
@@ -105,6 +125,28 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
             perLegStake,
             `YES+NO=${bundle.totalProb.toFixed(2)} arb (edge ${bundle.edgePct.toFixed(2)}pp)`
           );
+          
+          if (homeResult.success && riskService) {
+            riskService.recordTrade(perLegStake);
+          }
+
+          if (riskService) {
+            const awayCheck = riskService.canPlaceTrade(
+              perLegStake,
+              balance || 0,
+              activePositions.length,
+              activeOrders
+            );
+            if (!awayCheck.allowed) {
+              console.log(`[RISK] Skipping arbitrage: ${awayCheck.reason}`);
+              continue;
+            }
+            if (!riskService.checkMaxPositionsPerMarket(bundle.away.ticker, activePositions)) {
+              console.log(`[RISK] Max positions per market reached for ${bundle.away.ticker}`);
+              continue;
+            }
+          }
+
           const awayResult = await tradingService.placeTrade(
             'arbitrage',
             awayMispricing,
@@ -114,6 +156,10 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
             perLegStake,
             `YES+NO=${bundle.totalProb.toFixed(2)} arb (edge ${bundle.edgePct.toFixed(2)}pp)`
           );
+
+          if (awayResult.success && riskService) {
+            riskService.recordTrade(perLegStake);
+          }
 
           if (homeResult.success && awayResult.success) {
             console.log(
@@ -356,6 +402,25 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
               };
               const rationale = `ESPN edge ${diffPct}pp (${kalshiPct}% vs ${espnPct}%)`;
               
+              // Risk checks
+              const estimatedNotional = config.trading.maxBetSize || data.diffPct || 5;
+              if (riskService) {
+                const riskCheck = riskService.canPlaceTrade(
+                  estimatedNotional,
+                  balance || 0,
+                  activePositions.length,
+                  activeOrders
+                );
+                if (!riskCheck.allowed) {
+                  console.log(`      [RISK] Skipping mispricing: ${riskCheck.reason}`);
+                  continue;
+                }
+                if (!riskService.checkMaxPositionsPerMarket(market.ticker, activePositions)) {
+                  console.log(`      [RISK] Max positions per market reached for ${market.ticker}`);
+                  continue;
+                }
+              }
+              
               const tradeResult = await tradingService.placeTrade(
                 'mispricing',
                 mispricingForTrade,
@@ -366,6 +431,9 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
                 rationale
               );
               if (tradeResult.success) {
+                if (riskService) {
+                  riskService.recordTrade(estimatedNotional);
+                }
                 console.log(`      ${colors.green}✅ Trade placed: ${tradeResult.orderId || 'Order ID pending'}${colors.reset}`);
               } else if (tradeResult.error !== 'Existing position found' && tradeResult.error !== 'Pending order found') {
                 // Only show error if it's not about existing position or pending order (those are expected)
@@ -417,7 +485,8 @@ async function runSpreadFarmingForSeries(
   activePositions: any[],
   activeOrders: any[],
   tradingService?: TradingService,
-  balance?: number | null
+  balance?: number | null,
+  riskService?: RiskService
 ): Promise<void> {
   if (!tradingService || balance == null) return;
 
@@ -437,6 +506,25 @@ async function runSpreadFarmingForSeries(
           `${colors.gray}Spread-farming paused (open positions ${openCount}/${maxOpen})${colors.reset}`
       );
       return;
+    }
+
+    // Check reserve cash requirement for spread farming
+    if (balance !== null && balance !== undefined) {
+      const reserveCash = config.risk.spreadReserveCash;
+      const reserveCashPct = config.risk.spreadReserveCashPct;
+      let requiredReserve = 0;
+      if (reserveCash !== undefined) {
+        requiredReserve = reserveCash;
+      } else if (reserveCashPct !== undefined) {
+        requiredReserve = balance * (reserveCashPct / 100);
+      }
+      if (balance < requiredReserve) {
+        console.log(
+          `${emoji} ${colors.bright}${colors.cyan}${label}${colors.reset}: ` +
+            `${colors.gray}Spread-farming paused (balance $${balance.toFixed(2)} < reserve $${requiredReserve.toFixed(2)})${colors.reset}`
+        );
+        return;
+      }
     }
 
     const spreadCandidates = tradingService.findSpreadExtremes(markets);
@@ -471,14 +559,39 @@ async function runSpreadFarmingForSeries(
       // Use smaller sizing for spread farming; per-strategy caps still apply.
       const stake = (config.trading.maxBetSize || 4) / 2;
 
+      // Risk checks
+      if (riskService) {
+        const riskCheck = riskService.canPlaceTrade(
+          stake,
+          balance || 0,
+          activePositions.length,
+          activeOrders
+        );
+        if (!riskCheck.allowed) {
+          console.log(`  [RISK] Skipping spread: ${riskCheck.reason}`);
+          continue;
+        }
+        if (!riskService.checkMaxPositionsPerMarket(mkt.ticker, activePositions)) {
+          console.log(`  [RISK] Max positions per market reached for ${mkt.ticker}`);
+          continue;
+        }
+      }
+
       await tradingService.placeTrade(
         'spread',
         syntheticMispricing,
         mkt.ticker,
         activePositions,
         activeOrders,
-        stake
+        stake,
+        syntheticMispricing.kalshiImpliedProbability <= 0.15
+          ? 'prob<=0.15 extreme'
+          : 'prob>=0.85 extreme'
       );
+
+      if (riskService) {
+        riskService.recordTrade(stake);
+      }
     }
   } catch (error: any) {
     console.error(
@@ -654,11 +767,19 @@ export async function runMispricingCheck(): Promise<void> {
   // Display account info
   await displayAccountInfo();
   
-  // Initialize trading service if configured
+  // Initialize services
+  const riskService = new RiskService();
   let tradingService: TradingService | undefined;
+  let positionManager: PositionManager | undefined;
+  
   if (config.trading) {
     // Use the same KalshiClient instance to access PortfolioApi, MarketsApi and refresh orders
     tradingService = new TradingService(kalshiClient.portfolioApi, kalshiClient.marketsApi, config.trading, kalshiClient);
+    positionManager = new PositionManager(
+      kalshiClient.portfolioApi,
+      kalshiClient.marketsApi,
+      kalshiClient
+    );
     
     if (config.trading.liveTrades) {
       console.log(`\n${colors.bright}${colors.yellow}⚠️  LIVE TRADING ENABLED${colors.reset}`);
@@ -667,17 +788,40 @@ export async function runMispricingCheck(): Promise<void> {
     }
   }
 
+  // Print daily risk stats
+  const dailyStats = riskService.getDailyStats();
+  if (dailyStats) {
+    console.log(`\n${colors.bright}${colors.cyan}📊 Daily Stats:${colors.reset}`);
+    console.log(`  Trades: ${dailyStats.tradesCount}${config.risk.maxDailyTrades ? `/${config.risk.maxDailyTrades}` : ''}`);
+    console.log(`  Notional: $${dailyStats.notionalSpent.toFixed(2)}${config.risk.maxDailyNotional ? `/$${config.risk.maxDailyNotional.toFixed(2)}` : ''}`);
+    console.log(`  Realized P&L: ${dailyStats.realizedPnl >= 0 ? colors.green : colors.red}$${dailyStats.realizedPnl.toFixed(2)}${colors.reset}${config.risk.maxDailyLoss ? ` (limit: -$${config.risk.maxDailyLoss.toFixed(2)})` : ''}`);
+  }
+
+  // CRITICAL: Manage positions FIRST (exits before entries)
+  if (positionManager && activePositions.length > 0) {
+    console.log(`\n${colors.bright}${colors.cyan}🔄 Managing ${activePositions.length} open positions...${colors.reset}`);
+    const managedCount = await positionManager.managePositions(activePositions, activeOrders);
+    if (managedCount > 0) {
+      console.log(`  ${colors.green}✅ Evaluated ${managedCount} positions for exit${colors.reset}`);
+    }
+    // Refresh positions/orders after exits
+    const refreshedPositions = await kalshiClient.getActivePositions();
+    const refreshedOrders = await kalshiClient.getActiveOrders();
+    Object.assign(activePositions, refreshedPositions);
+    Object.assign(activeOrders, refreshedOrders);
+  }
+
   // Before opening any new positions, enforce spread-farming max hold time exits
   if (tradingService) {
     await tradingService.enforceSpreadMaxHoldTime(activePositions, activeOrders);
   }
   
-  // Run checks for all sports, passing active positions, orders, and trading service
-  await runMispricingCheckForSport('nba', activePositions, activeOrders, tradingService, balance);
-  await runMispricingCheckForSport('nfl', activePositions, activeOrders, tradingService, balance);
-  await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance);
-  await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance);
-  await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance);
+  // Run checks for all sports, passing active positions, orders, trading service, and risk service
+  await runMispricingCheckForSport('nba', activePositions, activeOrders, tradingService, balance, riskService);
+  await runMispricingCheckForSport('nfl', activePositions, activeOrders, tradingService, balance, riskService);
+  await runMispricingCheckForSport('nhl', activePositions, activeOrders, tradingService, balance, riskService);
+  await runMispricingCheckForSport('ncaab', activePositions, activeOrders, tradingService, balance, riskService);
+  await runMispricingCheckForSport('ncaaf', activePositions, activeOrders, tradingService, balance, riskService);
 
   await runSpreadFarmingForSeries(
     'KXNBLGAME',
@@ -687,7 +831,8 @@ export async function runMispricingCheck(): Promise<void> {
     activePositions,
     activeOrders,
     tradingService,
-    balance
+    balance,
+    riskService
   );
 
   await runSpreadFarmingForSeries(
@@ -698,7 +843,8 @@ export async function runMispricingCheck(): Promise<void> {
     activePositions,
     activeOrders,
     tradingService,
-    balance
+    balance,
+    riskService
   );
 }
 
