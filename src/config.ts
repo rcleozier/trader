@@ -58,6 +58,7 @@ interface Config {
   bot: {
     mispricingThresholdPct: number;
     runScheduleCron?: string;
+    minEdgeAfterCostsPct?: number; // Minimum edge after accounting for execution costs
   };
   trading: {
     liveTrades: boolean;
@@ -169,8 +170,12 @@ export const config: Config = {
     toEmail: requireEnv('EMAIL_TO'),
   } : undefined,
   bot: {
-    mispricingThresholdPct: parseFloat(getOptionalEnv('MISPRICING_THRESHOLD_PCT', '0.05') || '0.05'),
+    // Increased threshold to 0.10 (10pp) to account for execution costs and ensure real edge
+    // Previous 0.05 (5pp) was too low after slippage/fees
+    mispricingThresholdPct: parseFloat(getOptionalEnv('MISPRICING_THRESHOLD_PCT', '0.10') || '0.10'),
     runScheduleCron: getOptionalEnv('RUN_SCHEDULE_CRON'),
+    // Minimum edge after costs (slippage + fees buffer)
+    minEdgeAfterCostsPct: parseFloat(getOptionalEnv('MIN_EDGE_AFTER_COSTS_PCT', '0.05') || '0.05'),
   },
   trading: {
     liveTrades: getOptionalEnv('LIVE_TRADES', 'false') === 'true',

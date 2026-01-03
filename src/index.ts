@@ -402,6 +402,19 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
               };
               const rationale = `ESPN edge ${diffPct}pp (${kalshiPct}% vs ${espnPct}%)`;
               
+              // CRITICAL: Account for execution costs (slippage + fees)
+              // Assume ~2-3pp eaten by costs, require minimum edge after costs
+              const executionCostBuffer = 0.03; // 3 percentage points for slippage/fees
+              const edgeAfterCosts = diffPct - (executionCostBuffer * 100);
+              const minEdgeAfterCosts = (config.bot.minEdgeAfterCostsPct || 0.05) * 100;
+              
+              if (edgeAfterCosts < minEdgeAfterCosts) {
+                console.log(
+                  `      ${colors.yellow}[SKIP] Edge too small after costs: ${diffPct.toFixed(2)}pp - ${(executionCostBuffer * 100).toFixed(2)}pp = ${edgeAfterCosts.toFixed(2)}pp (need ${minEdgeAfterCosts.toFixed(2)}pp)${colors.reset}`
+                );
+                continue;
+              }
+              
               // Risk checks
               const estimatedNotional = config.trading.maxBetSize || data.diffPct || 5;
               if (riskService) {
