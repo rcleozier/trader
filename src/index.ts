@@ -276,7 +276,8 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
         const teamColor = side === 'home' ? colors.magenta : colors.cyan;
         const kalshiPct = (data.kalshi.prob * 100).toFixed(2);
         const espnPct = (data.espn.prob * 100).toFixed(2);
-        const diffPct = data.diffPct ? data.diffPct.toFixed(2) : '0.00';
+        const diffPctNum = data.diffPct || 0; // Keep as number for calculations
+        const diffPct = diffPctNum.toFixed(2); // String for display
         const diffAbs = data.diff ? (data.diff * 100).toFixed(2) : '0.00';
         const espnOddsStr = data.espn.odds > 0 ? `+${data.espn.odds}` : `${data.espn.odds}`;
         const isOverThreshold = data.isOverThreshold || false;
@@ -405,12 +406,12 @@ async function runMispricingCheckForSport(sport: 'nba' | 'nfl' | 'nhl' | 'ncaab'
               // CRITICAL: Account for execution costs (slippage + fees)
               // Assume ~2-3pp eaten by costs, require minimum edge after costs
               const executionCostBuffer = 0.03; // 3 percentage points for slippage/fees
-              const edgeAfterCosts = diffPct - (executionCostBuffer * 100);
+              const edgeAfterCosts = diffPctNum - (executionCostBuffer * 100);
               const minEdgeAfterCosts = (config.bot.minEdgeAfterCostsPct || 0.05) * 100;
               
               if (edgeAfterCosts < minEdgeAfterCosts) {
                 console.log(
-                  `      ${colors.yellow}[SKIP] Edge too small after costs: ${diffPct.toFixed(2)}pp - ${(executionCostBuffer * 100).toFixed(2)}pp = ${edgeAfterCosts.toFixed(2)}pp (need ${minEdgeAfterCosts.toFixed(2)}pp)${colors.reset}`
+                  `      ${colors.yellow}[SKIP] Edge too small after costs: ${diffPctNum.toFixed(2)}pp - ${(executionCostBuffer * 100).toFixed(2)}pp = ${edgeAfterCosts.toFixed(2)}pp (need ${minEdgeAfterCosts.toFixed(2)}pp)${colors.reset}`
                 );
                 continue;
               }
