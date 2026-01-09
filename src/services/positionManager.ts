@@ -149,25 +149,34 @@ export class PositionManager {
     // Check exit conditions
     const rules = this.exitRules;
 
-    // 1. Take profit: cents per contract
+    // Account for Kalshi fees on exit (typically ~1-2% or ~1-2 cents per contract)
+    // We'll use a conservative estimate of 2 cents per contract for fees
+    const exitFeePerContract = 2; // cents
+    const exitFeeTotal = exitFeePerContract * positionCount;
+
+    // 1. Take profit: cents per contract (after fees)
     if (rules.takeProfitCentsPerContract !== undefined) {
       const profitCents = currentPrice - entryPriceCents;
-      if (profitCents >= rules.takeProfitCentsPerContract) {
+      const profitAfterFees = profitCents - exitFeePerContract;
+      if (profitAfterFees >= rules.takeProfitCentsPerContract) {
         return {
           shouldExit: true,
           exitPrice: bestBid,
-          reason: `TP: +${profitCents.toFixed(1)}¢/contract`,
+          reason: `TP: +${profitAfterFees.toFixed(1)}¢/contract (after ${exitFeePerContract}¢ fee)`,
         };
       }
     }
 
-    // 2. Take profit: percentage of cost
+    // 2. Take profit: percentage of cost (after fees)
     if (rules.takeProfitPctOfCost !== undefined) {
-      if (unrealizedPnlPct >= rules.takeProfitPctOfCost) {
+      const valueAfterFees = currentValue - exitFeeTotal;
+      const pnlAfterFees = valueAfterFees - totalCost;
+      const pnlPctAfterFees = (pnlAfterFees / totalCost) * 100;
+      if (pnlPctAfterFees >= rules.takeProfitPctOfCost) {
         return {
           shouldExit: true,
           exitPrice: bestBid,
-          reason: `TP: +${unrealizedPnlPct.toFixed(2)}% of cost`,
+          reason: `TP: +${pnlPctAfterFees.toFixed(2)}% of cost (after fees)`,
         };
       }
     }
